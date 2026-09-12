@@ -1,0 +1,10 @@
+# Google OAuth secrets and local application state
+credentials.json
+token.json
+state.json
+
+# Local build output and macOS metadata
+/weekly-tasks
+.DS_Store
+
+aidocs/
