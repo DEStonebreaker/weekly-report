@@ -5,7 +5,9 @@ state.json
 
 # Local build output and macOS metadata
 /weekly-tasks
+/weekly-report
+/demo.html
 .DS_Store
 
 aidocs/
-idea/
+.idea/

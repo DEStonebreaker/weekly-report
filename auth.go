@@ -18,13 +18,10 @@ import (
 	tasksapi "google.golang.org/api/tasks/v1"
 )
 
-// Get credentials/secrets
-
-func createConfig(credentialsPath string) (*oauth2.Config, error) {
-
+func loadOAuthConfig(credentialsPath string) (*oauth2.Config, error) {
 	credentials, err := os.ReadFile(credentialsPath)
 	if err != nil {
-		return nil, fmt.Errorf("error reading client secret file: %w", err)
+		return nil, fmt.Errorf("read client secret file: %w", err)
 	}
 
 	config, err := google.ConfigFromJSON(
@@ -32,7 +29,7 @@ func createConfig(credentialsPath string) (*oauth2.Config, error) {
 		tasksapi.TasksReadonlyScope,
 		gmailapi.GmailSendScope)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing client secret file to config: %w", err)
+		return nil, fmt.Errorf("parse client secret file: %w", err)
 	}
 
 	return config, nil
@@ -64,13 +61,12 @@ func createGoogleClient(
 func loadToken(path string) (*oauth2.Token, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-
-		return nil, fmt.Errorf("error reading token file: %w", err)
+		return nil, fmt.Errorf("read token file: %w", err)
 	}
 
 	var token oauth2.Token
 	if err := json.Unmarshal(data, &token); err != nil {
-		return nil, fmt.Errorf("error unmarshaling token file: %w", err)
+		return nil, fmt.Errorf("unmarshal token file: %w", err)
 	}
 
 	return &token, nil
@@ -79,22 +75,22 @@ func loadToken(path string) (*oauth2.Token, error) {
 func saveTokenFile(path string, token *oauth2.Token) error {
 	data, err := json.MarshalIndent(token, "", "  ")
 	if err != nil {
-		return fmt.Errorf("error marshaling token file: %w", err)
+		return fmt.Errorf("marshal token file: %w", err)
 	}
 
 	err = os.MkdirAll(filepath.Dir(path), 0700)
 	if err != nil {
-		return fmt.Errorf("error creating token file directory: %w", err)
+		return fmt.Errorf("create token file directory: %w", err)
 	}
 
 	err = os.WriteFile(path, data, 0600)
 	if err != nil {
-		return fmt.Errorf("error writing token file: %w", err)
+		return fmt.Errorf("write token file: %w", err)
 	}
 
 	err = os.Chmod(path, 0600)
 	if err != nil {
-		return fmt.Errorf("error setting token file permissions: %w", err)
+		return fmt.Errorf("set token file permissions: %w", err)
 	}
 
 	return nil
@@ -120,7 +116,7 @@ func authorizeWithGoogle(
 	reader := bufio.NewReader(os.Stdin)
 	input, err := reader.ReadString('\n')
 	if err != nil {
-		return nil, fmt.Errorf("error reading input: %w", err)
+		return nil, fmt.Errorf("read input: %w", err)
 	}
 
 	redirectURL, err := url.Parse(strings.TrimSpace(input))

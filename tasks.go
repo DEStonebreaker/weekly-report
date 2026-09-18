@@ -1,179 +1,134 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
+	"slices"
 	"time"
+
+	"google.golang.org/api/option"
+	tasksapi "google.golang.org/api/tasks/v1"
 )
-
-const tasksBaseEndpoint string = "https://tasks.googleapis.com"
-
-/* TasksAPI structs, source:
- * https://www.googleapis.com/discovery/v1/apis/tasks/v1/rest
- */
 
 type TaskList struct {
-	ID      string    `json:"id"`
-	Title   string    `json:"title"`
-	Updated time.Time `json:"updated"`
+	ID    string
+	Title string
 }
-
-type TaskListsResponse struct {
-	Items         []TaskList `json:"items"`
-	NextPageToken string     `json:"nextPageToken"`
-}
-
-type TaskStatus string
-
-const (
-	TaskNeedsAction TaskStatus = "needsAction"
-	TaskCompleted   TaskStatus = "completed"
-)
 
 type Task struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	DueDate     *time.Time `json:"due"`
-	Updated     time.Time  `json:"updated"`
-	Status      TaskStatus `json:"status"`
-	Deleted     bool       `json:"deleted"`
-	Hidden      bool       `json:"hidden"`
-	WebViewLink string     `json:"webViewLink"`
-	Notes       string     `json:"notes"`
-}
-
-type TaskListResponse struct {
-	Items         []Task `json:"items"`
-	NextPageToken string `json:"nextPageToken"`
+	ID          string
+	Title       string
+	DueDate     *time.Time
+	WebViewLink string
+	Notes       string
 }
 
 type GetTasksOptions struct {
-	DueMax    *time.Time
-	PageToken string
+	DueMax *time.Time
+	DueMin *time.Time
+}
+
+func createTasksService(ctx context.Context, client *http.Client) (*tasksapi.Service, error) {
+	service, err := tasksapi.NewService(ctx, option.WithHTTPClient(client))
+	if err != nil {
+		return nil, fmt.Errorf("create Google Tasks service: %w", err)
+	}
+
+	return service, nil
 }
 
 func GetTasks(
-	client *http.Client,
+	ctx context.Context,
+	service *tasksapi.Service,
 	taskListID string,
 	opts GetTasksOptions,
 ) ([]Task, error) {
+	call := service.Tasks.List(taskListID).ShowCompleted(false)
+	if opts.DueMin != nil {
+		call.DueMin(opts.DueMin.Format(time.RFC3339))
+	}
+	if opts.DueMax != nil {
+		call.DueMax(opts.DueMax.Format(time.RFC3339))
+	}
 
 	var tasks []Task
-	var pageToken string
+	err := call.Pages(ctx, func(page *tasksapi.Tasks) error {
+		for _, apiTask := range page.Items {
+			if apiTask == nil {
+				continue
+			}
 
-	for {
-		n_url, err := url.Parse(strings.Join(
-			[]string{
-				tasksBaseEndpoint,
-				"tasks",
-				"v1",
-				"lists",
-				taskListID,
-				"tasks",
-			},
-			"/",
-		))
-		if err != nil {
-			return nil, err
+			task, err := taskFromAPI(apiTask)
+			if err != nil {
+				return err
+			}
+			tasks = append(tasks, task)
 		}
-
-		query := n_url.Query()
-
-		if opts.DueMax != nil {
-			query.Set("dueMax", opts.DueMax.Format(time.RFC3339))
-		}
-
-		if pageToken != "" {
-			query.Set("pageToken", pageToken)
-		}
-
-		n_url.RawQuery = query.Encode()
-
-		resp, err := client.Get(n_url.String())
-		if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return nil, fmt.Errorf(
-				"Google Tasks API returned status %s",
-				resp.Status,
-			)
-		}
-
-		var result TaskListResponse
-
-		err = json.NewDecoder(resp.Body).Decode(&result)
-		resp.Body.Close()
-
-		if err != nil {
-			return nil, err
-		}
-
-		tasks = append(tasks, result.Items...)
-
-		if result.NextPageToken == "" {
-			break
-		}
-
-		pageToken = result.NextPageToken
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list Google tasks: %w", err)
 	}
 
 	return tasks, nil
 }
 
-func GetTasklists(client *http.Client) ([]TaskList, error) {
-	var tasklists []TaskList
-	var pageToken string
-
-	for {
-		n_url, err := url.Parse(strings.Join(
-			[]string{
-				tasksBaseEndpoint,
-				"tasks",
-				"v1",
-				"users",
-				"@me",
-				"lists",
-			},
-			"/"))
-		if err != nil {
-			return nil, err
+func GetTaskLists(ctx context.Context, service *tasksapi.Service) ([]TaskList, error) {
+	var taskLists []TaskList
+	err := service.Tasklists.List().Pages(ctx, func(page *tasksapi.TaskLists) error {
+		for _, apiTaskList := range page.Items {
+			if apiTaskList == nil {
+				continue
+			}
+			taskLists = append(taskLists, TaskList{
+				ID:    apiTaskList.Id,
+				Title: apiTaskList.Title,
+			})
 		}
-		query := n_url.Query()
-		if pageToken != "" {
-			query.Set("pageToken", pageToken)
-		}
-
-		n_url.RawQuery = query.Encode()
-		resp, err := client.Get(n_url.String())
-		if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf(
-				"Google Tasks API returned status %s",
-				resp.Status,
-			)
-		}
-
-		var result TaskListsResponse
-		err = json.NewDecoder(resp.Body).Decode(&result)
-		resp.Body.Close()
-
-		if err != nil {
-			return nil, err
-		}
-		tasklists = append(tasklists, result.Items...)
-		if result.NextPageToken == "" {
-			break
-		}
-		pageToken = result.NextPageToken
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list Google task lists: %w", err)
 	}
-	return tasklists, nil
+
+	return taskLists, nil
+}
+
+func taskFromAPI(apiTask *tasksapi.Task) (Task, error) {
+	var dueDate *time.Time
+	if apiTask.Due != "" {
+		parsed, err := time.Parse(time.RFC3339, apiTask.Due)
+		if err != nil {
+			return Task{}, fmt.Errorf("parse due date for task %q: %w", apiTask.Id, err)
+		}
+		dueDate = &parsed
+	}
+
+	return Task{
+		ID:          apiTask.Id,
+		Title:       apiTask.Title,
+		DueDate:     dueDate,
+		WebViewLink: apiTask.WebViewLink,
+		Notes:       apiTask.Notes,
+	}, nil
+}
+
+func SortByDueDate(tasks []Task) []Task {
+	sorted := slices.Clone(tasks)
+
+	slices.SortFunc(sorted, func(a, b Task) int {
+		switch {
+		case a.DueDate == nil && b.DueDate == nil:
+			return 0
+		case a.DueDate == nil:
+			return 1
+		case b.DueDate == nil:
+			return -1
+		default:
+			return a.DueDate.Compare(*b.DueDate)
+		}
+	})
+
+	return sorted
 }
