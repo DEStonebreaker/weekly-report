@@ -90,7 +90,10 @@ func SendEmail(
 	if err != nil {
 		return "", err
 	}
+	return sendRawEmail(ctx, service, raw)
+}
 
+func sendRawEmail(ctx context.Context, service *gmailapi.Service, raw string) (string, error) {
 	sent, err := service.Users.Messages.Send(
 		"me",
 		&gmailapi.Message{Raw: raw},

@@ -19,6 +19,8 @@ var reportTemplate = template.Must(
 
 type Report struct {
 	Name      string
+	StartDate string
+	EndDate   string
 	TaskCount int
 	Tasks     []EmailTask
 }
@@ -72,7 +74,7 @@ func splitTaskNotes(notes string) (string, string) {
 
 // RenderReport renders the weekly report as HTML. Tasks without a due date are
 // omitted, and the order of the remaining tasks is preserved.
-func RenderReport(name string, tasks []Task) (string, error) {
+func RenderReport(name string, tasks []Task, window ReportWindow) (string, error) {
 	emailTasks := make([]EmailTask, 0, len(tasks))
 	for _, task := range tasks {
 		if task.DueDate == nil {
@@ -84,6 +86,8 @@ func RenderReport(name string, tasks []Task) (string, error) {
 
 	report := Report{
 		Name:      name,
+		StartDate: window.Start.Format("Jan 2, 2006"),
+		EndDate:   window.End.Format("Jan 2, 2006"),
 		TaskCount: len(emailTasks),
 		Tasks:     emailTasks,
 	}

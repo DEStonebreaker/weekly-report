@@ -15,6 +15,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	gmailapi "google.golang.org/api/gmail/v1"
+	"google.golang.org/api/googleapi"
 	tasksapi "google.golang.org/api/tasks/v1"
 )
 
@@ -35,27 +36,48 @@ func loadOAuthConfig(credentialsPath string) (*oauth2.Config, error) {
 	return config, nil
 }
 
-func createGoogleClient(
+func savedGoogleClient(
 	ctx context.Context,
 	config *oauth2.Config,
 	tokenPath string) (*http.Client, error) {
 
 	token, err := loadToken(tokenPath)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-
-		token, err = authorizeWithGoogle(ctx, config)
-		if err != nil {
-			return nil, err
-		}
-		if err := saveTokenFile(tokenPath, token); err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("load saved Google token (run weekly-report --init): %w", err)
 	}
+	if !token.Valid() && token.RefreshToken == "" {
+		return nil, fmt.Errorf("saved Google token is unusable; run weekly-report --init")
+	}
+	usable, err := config.TokenSource(ctx, token).Token()
+	if err != nil {
+		return nil, fmt.Errorf("refresh saved Google token (run weekly-report --init): %w", err)
+	}
+	return config.Client(ctx, usable), nil
+}
 
-	return config.Client(ctx, token), nil
+func initializeToken(ctx context.Context, config *oauth2.Config, tokenPath string, authorize func(context.Context, *oauth2.Config) (*oauth2.Token, error)) error {
+	token, err := authorize(ctx, config)
+	if err != nil {
+		return err
+	}
+	if !token.Valid() {
+		return fmt.Errorf("Google returned an unusable access token; existing token was preserved")
+	}
+	if token.RefreshToken == "" {
+		return fmt.Errorf("Google did not provide a refresh token; existing token was preserved")
+	}
+	if _, err := config.TokenSource(ctx, token).Token(); err != nil {
+		return fmt.Errorf("verify authorized token (existing token was preserved): %w", err)
+	}
+	return saveTokenFile(tokenPath, token)
+}
+
+func withAuthHint(err error) error {
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) && apiErr.Code == http.StatusUnauthorized {
+		return fmt.Errorf("%w; run weekly-report --init", err)
+	}
+	return err
 }
 
 func loadToken(path string) (*oauth2.Token, error) {
@@ -83,16 +105,27 @@ func saveTokenFile(path string, token *oauth2.Token) error {
 		return fmt.Errorf("create token file directory: %w", err)
 	}
 
-	err = os.WriteFile(path, data, 0600)
+	temp, err := os.CreateTemp(filepath.Dir(path), ".token-*")
 	if err != nil {
-		return fmt.Errorf("write token file: %w", err)
+		return fmt.Errorf("create temporary token file: %w", err)
 	}
-
-	err = os.Chmod(path, 0600)
-	if err != nil {
-		return fmt.Errorf("set token file permissions: %w", err)
+	defer os.Remove(temp.Name())
+	defer temp.Close()
+	if err := temp.Chmod(0600); err != nil {
+		return err
 	}
-
+	if _, err := temp.Write(data); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temp.Name(), path); err != nil {
+		return fmt.Errorf("replace token file: %w", err)
+	}
 	return nil
 }
 
@@ -106,6 +139,7 @@ func authorizeWithGoogle(
 	authURL := config.AuthCodeURL(
 		state,
 		oauth2.AccessTypeOffline,
+		oauth2.ApprovalForce,
 		oauth2.S256ChallengeOption(verifier))
 
 	fmt.Println("Open this URL in your browser and approve access:")
