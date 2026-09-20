@@ -28,7 +28,7 @@ type sendResult struct {
 	err       error
 }
 
-func sendReport(ctx context.Context, config Config, window ReportWindow, state *DeliveryState, lists []TaskList, tasksService *tasksapi.Service, client *http.Client, output io.Writer) error {
+func sendReport(ctx context.Context, config Config, window, reportRange ReportWindow, force bool, state *DeliveryState, lists []TaskList, tasksService *tasksapi.Service, client *http.Client, output io.Writer) error {
 	listID, err := selectTaskList(lists, config.TaskListID)
 	if err != nil {
 		return err
@@ -36,7 +36,7 @@ func sendReport(ctx context.Context, config Config, window ReportWindow, state *
 	pending := make([]Recipient, 0, len(config.Recipients))
 	results, _ := existingResults(config, window, state)
 	for i, recipient := range config.Recipients {
-		if results[i].status == "" {
+		if force || results[i].status == "" {
 			pending = append(pending, recipient)
 		}
 	}
@@ -44,8 +44,8 @@ func sendReport(ctx context.Context, config Config, window ReportWindow, state *
 		printSendResults(output, results)
 		return resultError(results)
 	}
-	dueMin := window.Start
-	dueMax := window.End.AddDate(0, 0, 1).Add(-time.Second)
+	dueMin := reportRange.Start
+	dueMax := reportRange.End.AddDate(0, 0, 1).Add(-time.Second)
 	tasks, err := GetTasks(ctx, tasksService, listID, GetTasksOptions{DueMin: &dueMin, DueMax: &dueMax})
 	if err != nil {
 		return fmt.Errorf("get tasks: %w", withAuthHint(err))
@@ -53,7 +53,7 @@ func sendReport(ctx context.Context, config Config, window ReportWindow, state *
 	tasks = SortByDueDate(tasks)
 	prepared := make([]preparedEmail, 0, len(pending))
 	for _, recipient := range pending {
-		body, err := RenderReport(recipient.Name, tasks, window)
+		body, err := RenderReport(recipient.Name, tasks, reportRange)
 		if err != nil {
 			return fmt.Errorf("render report for %s: %w", recipient.Address, err)
 		}
@@ -67,7 +67,7 @@ func sendReport(ctx context.Context, config Config, window ReportWindow, state *
 	if err != nil {
 		return err
 	}
-	sent := sendPrepared(ctx, gmailService, prepared, state)
+	sent := sendPrepared(ctx, gmailService, prepared, state, force)
 	for i, recipient := range config.Recipients {
 		for _, result := range sent {
 			if recipient.Address == result.recipient.Address {
@@ -116,7 +116,7 @@ func resultError(results []sendResult) error {
 	return nil
 }
 
-func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []preparedEmail, state *DeliveryState) []sendResult {
+func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []preparedEmail, state *DeliveryState, force bool) []sendResult {
 	results := make([]sendResult, len(prepared))
 	slots := make(chan struct{}, 4)
 	var group sync.WaitGroup
@@ -140,7 +140,7 @@ func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []pre
 				results[index] = result
 				return
 			}
-			if err := state.set(message.key, DeliveryRecord{Status: "uncertain"}); err != nil {
+			if err := state.beginAttempt(message.key, force); err != nil {
 				result.status = "FAILED"
 				result.err = fmt.Errorf("record send attempt: %w", err)
 				results[index] = result

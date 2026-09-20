@@ -44,6 +44,7 @@ Extend the existing `Config` and `Recipient` fields and TOML tags with the two d
 | `weekly-report --init` | Use `credentials.json` to run the interactive OAuth flow and save or replace `token.json`; do not require report TOML or send email. |
 | `weekly-report --list-task-lists` | Use the saved OAuth token, print each list title and ID, then exit without reading report TOML or sending email. |
 | `weekly-report` | Load and validate TOML, check whether the current report window needs delivery, then send and print results if due. Otherwise exit without sending. |
+| `weekly-report send` | Explicitly force a report during the active window, regardless of earlier attempts. Query and display today's local date through that window's existing end date, inclusive. Error without sending if today is outside the configured schedule. |
 | `weekly-report --help` | Show flags, the setup order, and where to find `config.toml`. |
 
 Example list output:
@@ -60,7 +61,15 @@ Use [`Kong`](https://github.com/alecthomas/kong) for CLI parsing now. Model `--i
 
 ### CLI growth
 
-Future independent actions such as `validate-config`, `preview`, or `status` can become Kong commands. If `send` later becomes an explicit command, keep bare `weekly-report` as an alias or document a deliberate migration so existing scheduled invocations keep working. A future `--config` path can override the default config location without changing setup mode behavior.
+Future independent actions such as `validate-config`, `preview`, or `status` can become Kong commands. A future `--config` path can override the default config location without changing setup mode behavior.
+
+`send` is now an explicit force command; bare `weekly-report` remains the normal scheduled invocation. Kong's hidden default command preserves bare invocation while exposing `send` in help. The setup flags are incompatible with `send`.
+
+### Forced send semantics
+
+An explicit `weekly-report send` chooses the active anchored window using the same local-calendar rule as a normal run. It retains that window's original start and end for delivery-state keys. The Google Tasks query and rendered email range instead begin on today's local calendar date and end on the anchored window's end date, inclusive. For example, running `send` on Sep 22 inside a Sep 19–25 window queries and says “from Sep 22, 2026 to Sep 25, 2026.” A forced run before `start_date` or after `end_date` returns a clear no-active-window error before any API call or send.
+
+Each forced invocation prepares and attempts an email for every configured recipient, including recipients with earlier sent, failed, or uncertain outcomes for the same anchored window. Repeating the command intentionally sends again. The state file retains prior outcomes and attempt times in each recipient's history before recording the new attempt; a crash still leaves the current attempt uncertain. Normal bare invocations continue to skip every recipient attempted for that anchored window, including one last attempted by a forced invocation. A forced batch can partially fail or have uncertain results; report each recipient and return a nonzero exit status while preserving the no-automatic-retry rule for normal runs.
 
 ## Report dates
 
@@ -103,5 +112,6 @@ FAILED  bob@example.com    send Gmail message: ...
 - Batch preparation creates one correctly addressed, personalized message per recipient and sends nothing when rendering or message construction fails.
 - A fake Gmail endpoint confirms multiple sends can overlap, one failure does not cancel the others, and the final report and exit status reflect every outcome.
 - Rendered text shows the same inclusive active window used to fetch tasks, including the empty state and month or year boundaries.
+- The `send` command uses today's local date as the displayed and queried start inside an active window, sends again on repeated explicit invocations, retains earlier sent/failed/uncertain results, and leaves a later bare invocation with no new send. Outside the configured schedule it errors without sending.
 
 Tests should use fake API endpoints; they must not send real email. Update the README with the recurring TOML schedule, config location, `--init`, the list-discovery command, and send result behavior.

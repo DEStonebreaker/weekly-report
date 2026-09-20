@@ -14,8 +14,11 @@ import (
 )
 
 type CLI struct {
-	Init          bool `help:"Authorize Google access and save a token." xor:"mode"`
-	ListTaskLists bool `help:"Print task list titles and IDs." xor:"mode"`
+	Init          bool     `help:"Authorize Google access and save a token." xor:"mode"`
+	ListTaskLists bool     `help:"Print task list titles and IDs." xor:"mode"`
+	Run           struct{} `cmd:"" default:"1" hidden:""`
+	Send          struct{} `cmd:"" help:"Force a report for today through the active window's end."`
+	forceSend     bool
 }
 
 func main() {
@@ -26,19 +29,31 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	var cli CLI
-	parser, err := kong.New(&cli, kong.Name("weekly-report"), kong.Description("Send a recurring Google Tasks report. Run --init first, then --list-task-lists to find an ID. Configuration is config.toml in the weekly-tasks user config directory."))
+	cli, err := parseCLI(os.Args[1:])
 	if err != nil {
-		return err
-	}
-	parsed, err := parser.Parse(os.Args[1:])
-	if err != nil {
-		return err
-	}
-	if err := parsed.Validate(); err != nil {
 		return err
 	}
 	return runMode(ctx, cli, time.Now(), os.Stdout)
+}
+
+func parseCLI(args []string) (CLI, error) {
+	var cli CLI
+	parser, err := kong.New(&cli, kong.Name("weekly-report"), kong.Description("Run without a command for the scheduled report, or use send to force a report. Run --init first, then --list-task-lists to find an ID. Configuration is config.toml in the weekly-tasks user config directory."))
+	if err != nil {
+		return CLI{}, err
+	}
+	parsed, err := parser.Parse(args)
+	if err != nil {
+		return CLI{}, err
+	}
+	if err := parsed.Validate(); err != nil {
+		return CLI{}, err
+	}
+	cli.forceSend = parsed.Command() == "send"
+	if cli.forceSend && (cli.Init || cli.ListTaskLists) {
+		return CLI{}, fmt.Errorf("send cannot be combined with --init or --list-task-lists")
+	}
+	return cli, nil
 }
 
 func runMode(ctx context.Context, cli CLI, now time.Time, output io.Writer) error {
@@ -67,6 +82,7 @@ func runModeInDir(ctx context.Context, cli CLI, now time.Time, output io.Writer,
 	}
 	var config Config
 	var window ReportWindow
+	var reportRange ReportWindow
 	var state *DeliveryState
 	if !cli.ListTaskLists {
 		config, err = loadConfig(filepath.Join(appDir, "config.toml"))
@@ -78,16 +94,25 @@ func runModeInDir(ctx context.Context, cli CLI, now time.Time, output io.Writer,
 			return err
 		}
 		if window.Start.IsZero() {
+			if cli.forceSend {
+				return fmt.Errorf("no active report window for today's date")
+			}
 			return nil
+		}
+		reportRange = window
+		if cli.forceSend {
+			reportRange.Start = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 		}
 		state, err = openDeliveryState(appDir)
 		if err != nil {
 			return err
 		}
 		defer state.Close()
-		if results, complete := existingResults(config, window, state); complete {
-			printSendResults(output, results)
-			return resultError(results)
+		if !cli.forceSend {
+			if results, complete := existingResults(config, window, state); complete {
+				printSendResults(output, results)
+				return resultError(results)
+			}
 		}
 	}
 	oauthConfig, err := loadOAuthConfig(credentialsPath)
@@ -114,7 +139,7 @@ func runModeInDir(ctx context.Context, cli CLI, now time.Time, output io.Writer,
 		}
 		return writer.Flush()
 	}
-	return sendReport(ctx, config, window, state, taskLists, tasksService, client, output)
+	return sendReport(ctx, config, window, reportRange, cli.forceSend, state, taskLists, tasksService, client, output)
 }
 
 type ReportWindow struct {

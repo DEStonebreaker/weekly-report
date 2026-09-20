@@ -8,12 +8,15 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type DeliveryRecord struct {
-	Status    string `json:"status"`
-	MessageID string `json:"message_id,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Status      string           `json:"status"`
+	MessageID   string           `json:"message_id,omitempty"`
+	Error       string           `json:"error,omitempty"`
+	AttemptedAt string           `json:"attempted_at,omitempty"`
+	History     []DeliveryRecord `json:"history,omitempty"`
 }
 
 type DeliveryState struct {
@@ -76,6 +79,30 @@ func (state *DeliveryState) get(key string) (DeliveryRecord, bool) {
 func (state *DeliveryState) set(key string, record DeliveryRecord) error {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if old, ok := state.records[key]; ok {
+		record.History = old.History
+		record.AttemptedAt = old.AttemptedAt
+	}
+	return state.replaceLocked(key, record)
+}
+
+func (state *DeliveryState) beginAttempt(key string, force bool) error {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	old, exists := state.records[key]
+	if exists && !force {
+		return fmt.Errorf("recipient was already attempted for this window")
+	}
+	record := DeliveryRecord{Status: "uncertain", AttemptedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	if exists {
+		record.History = append([]DeliveryRecord(nil), old.History...)
+		old.History = nil
+		record.History = append(record.History, old)
+	}
+	return state.replaceLocked(key, record)
+}
+
+func (state *DeliveryState) replaceLocked(key string, record DeliveryRecord) error {
 	old, existed := state.records[key]
 	state.records[key] = record
 	if err := state.save(); err != nil {
