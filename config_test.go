@@ -10,6 +10,9 @@ func TestConfigValidate(t *testing.T) {
 		Sender:     "Sender <sender@example.com>",
 		Subject:    "Weekly Report",
 		WindowDays: 7,
+		TaskListID: "list-id",
+		StartDate:  "2026-09-19",
+		EndDate:    "2026-10-05",
 		Recipients: []Recipient{
 			{Name: "Recipient", Address: "recipient@example.com"},
 		},

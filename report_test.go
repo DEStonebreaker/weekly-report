@@ -19,14 +19,14 @@ func TestRenderReport(t *testing.T) {
 		},
 		{Title: "No due date", DueDate: nil},
 		{Title: "Second task", DueDate: &secondDue},
-	})
+	}, testWindow())
 	if err != nil {
 		t.Fatalf("RenderReport() error = %v", err)
 	}
 
 	for _, want := range []string{
 		"Hey Don &amp; Co!",
-		"You have 2 tasks due this week.",
+		"You have 2 tasks due from Sep 14, 2026 to Sep 20, 2026.",
 		"First &lt;task&gt;",
 		`href="https://tasks.google.com/task/first?view=detail&amp;source=report"`,
 		`style="color:#1F1F1F !important;text-decoration:none !important;"`,
@@ -57,6 +57,10 @@ func TestRenderReport(t *testing.T) {
 	if strings.Index(html, "First &lt;task&gt;") > strings.Index(html, "Second task") {
 		t.Error("RenderReport() did not preserve task order")
 	}
+}
+
+func testWindow() ReportWindow {
+	return ReportWindow{Start: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)}
 }
 
 func TestToEmailTaskSeparatesTimeFromDescription(t *testing.T) {
@@ -114,23 +118,23 @@ func TestToEmailTaskSeparatesTimeFromDescription(t *testing.T) {
 func TestRenderReportSingularTask(t *testing.T) {
 	due := time.Date(2026, time.September, 14, 0, 0, 0, 0, time.UTC)
 
-	html, err := RenderReport("Donovan", []Task{{Title: "Only task", DueDate: &due}})
+	html, err := RenderReport("Donovan", []Task{{Title: "Only task", DueDate: &due}}, testWindow())
 	if err != nil {
 		t.Fatalf("RenderReport() error = %v", err)
 	}
 
-	if !strings.Contains(html, "You have 1 task due this week.") {
+	if !strings.Contains(html, "You have 1 task due from Sep 14, 2026 to Sep 20, 2026.") {
 		t.Error("rendered report does not use singular task grammar")
 	}
 }
 
 func TestRenderReportWithoutDatedTasks(t *testing.T) {
-	html, err := RenderReport("Donovan", []Task{{Title: "Undated task"}})
+	html, err := RenderReport("Donovan", []Task{{Title: "Undated task"}}, testWindow())
 	if err != nil {
 		t.Fatalf("RenderReport() error = %v", err)
 	}
 
-	if !strings.Contains(html, "You have no tasks due this week.") {
+	if !strings.Contains(html, "You have no tasks due from Sep 14, 2026 to Sep 20, 2026.") {
 		t.Error("rendered report does not contain the empty-state message")
 	}
 

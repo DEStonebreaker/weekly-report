@@ -3,6 +3,8 @@ module weekly-report
 go 1.26.0
 
 require (
+	github.com/BurntSushi/toml v1.5.0
+	github.com/alecthomas/kong v1.12.1
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.297.0
 )

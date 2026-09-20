@@ -9,5 +9,6 @@ state.json
 /demo.html
 .DS_Store
 
-aidocs/
+aidocs/*
+!aidocs/implementation-plan.md
 .idea/
