@@ -19,7 +19,8 @@ import (
 type Options struct {
 	Init          bool
 	ListTaskLists bool
-	ForceSend     bool
+	ManualSend    bool
+	Range         report.RangeOptions
 }
 
 func Run(ctx context.Context, cli Options, now time.Time, output io.Writer) error {
@@ -48,33 +49,30 @@ func runModeInDir(ctx context.Context, cli Options, now time.Time, output io.Wri
 	}
 	var config Config
 	var window report.ReportWindow
-	var reportRange report.ReportWindow
 	var state *DeliveryState
 	if !cli.ListTaskLists {
 		config, err = loadConfig(filepath.Join(appDir, "config.toml"))
 		if err != nil {
 			return err
 		}
-		window, err = activeWindow(config, now)
-		if err != nil {
-			return err
-		}
-		if window.Start.IsZero() {
-			if cli.ForceSend {
-				return fmt.Errorf("no active report window for today's date")
+		if cli.ManualSend {
+			window, err = cli.Range.Resolve(now)
+			if err != nil {
+				return err
 			}
-			return nil
-		}
-		reportRange = window
-		if cli.ForceSend {
-			reportRange.Start = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-		}
-		state, err = openDeliveryState(appDir)
-		if err != nil {
-			return err
-		}
-		defer state.Close()
-		if !cli.ForceSend {
+		} else {
+			window, err = activeWindow(config, now)
+			if err != nil {
+				return err
+			}
+			if window.Start.IsZero() {
+				return nil
+			}
+			state, err = openDeliveryState(appDir)
+			if err != nil {
+				return err
+			}
+			defer state.Close()
 			if results, complete := existingResults(config, window, state); complete {
 				printSendResults(output, results)
 				return resultError(results)
@@ -105,7 +103,7 @@ func runModeInDir(ctx context.Context, cli Options, now time.Time, output io.Wri
 		}
 		return writer.Flush()
 	}
-	return sendReport(ctx, config, window, reportRange, cli.ForceSend, state, taskLists, tasksService, client, output)
+	return sendReport(ctx, config, window, state, taskLists, tasksService, client, output)
 }
 
 func selectTaskList(taskLists []google.TaskList, configuredID string) (string, error) {
