@@ -74,7 +74,7 @@ func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
 	defer state.Close()
 	lists := []google.TaskList{{ID: "list-id", Title: "Work"}}
 	var output bytes.Buffer
-	err = sendReport(context.Background(), config, window, window, false, state, lists, tasksService, client, &output)
+	err = sendReport(context.Background(), config, window, state, lists, tasksService, client, &output)
 	if err == nil {
 		t.Fatal("partial failure did not return error")
 	}
@@ -85,7 +85,7 @@ func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
 		t.Errorf("calls: tasks=%d send=%d", taskCalls.Load(), sendCalls.Load())
 	}
 	output.Reset()
-	err = sendReport(context.Background(), config, window, window, false, state, lists, tasksService, client, &output)
+	err = sendReport(context.Background(), config, window, state, lists, tasksService, client, &output)
 	if err == nil {
 		t.Fatal("prior failure was not reported")
 	}
@@ -117,7 +117,7 @@ func TestReportPreparationFailureDoesNotSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	err = sendReport(context.Background(), config, window, window, false, state, []google.TaskList{{ID: "list-id"}}, tasksService, client, &bytes.Buffer{})
+	err = sendReport(context.Background(), config, window, state, []google.TaskList{{ID: "list-id"}}, tasksService, client, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "prepare report") {
 		t.Errorf("error=%v", err)
 	}
@@ -147,7 +147,7 @@ func TestReportTasksUnauthorizedSuggestsInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	err = sendReport(context.Background(), config, window, window, false, state, []google.TaskList{{ID: "list-id"}}, service, client, &bytes.Buffer{})
+	err = sendReport(context.Background(), config, window, state, []google.TaskList{{ID: "list-id"}}, service, client, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "weekly-report --init") {
 		t.Errorf("error=%v, want --init guidance", err)
 	}

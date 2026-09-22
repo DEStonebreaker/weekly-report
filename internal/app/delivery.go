@@ -29,7 +29,9 @@ type sendResult struct {
 	err       error
 }
 
-func sendReport(ctx context.Context, config Config, window, reportRange report.ReportWindow, force bool, state *DeliveryState, lists []google.TaskList, tasksService *tasksapi.Service, client *http.Client, output io.Writer) error {
+// sendReport uses state only for scheduled delivery. Manual sends pass nil and
+// neither consult nor change scheduled attempts.
+func sendReport(ctx context.Context, config Config, window report.ReportWindow, state *DeliveryState, lists []google.TaskList, tasksService *tasksapi.Service, client *http.Client, output io.Writer) error {
 	listID, err := selectTaskList(lists, config.TaskListID)
 	if err != nil {
 		return err
@@ -37,7 +39,7 @@ func sendReport(ctx context.Context, config Config, window, reportRange report.R
 	pending := make([]Recipient, 0, len(config.Recipients))
 	results, _ := existingResults(config, window, state)
 	for i, recipient := range config.Recipients {
-		if force || results[i].status == "" {
+		if results[i].status == "" {
 			pending = append(pending, recipient)
 		}
 	}
@@ -45,8 +47,8 @@ func sendReport(ctx context.Context, config Config, window, reportRange report.R
 		printSendResults(output, results)
 		return resultError(results)
 	}
-	dueMin := reportRange.Start
-	dueMax := reportRange.End.AddDate(0, 0, 1).Add(-time.Second)
+	dueMin := window.Start
+	dueMax := window.End.AddDate(0, 0, 1).Add(-time.Second)
 	tasks, err := google.GetTasks(ctx, tasksService, listID, google.GetTasksOptions{DueMin: &dueMin, DueMax: &dueMax})
 	if err != nil {
 		return fmt.Errorf("get tasks: %w", google.WithAuthHint(err))
@@ -54,7 +56,7 @@ func sendReport(ctx context.Context, config Config, window, reportRange report.R
 	tasks = report.SortByDueDate(tasks)
 	prepared := make([]preparedEmail, 0, len(pending))
 	for _, recipient := range pending {
-		body, err := report.RenderReport(recipient.Name, tasks, reportRange)
+		body, err := report.RenderReport(recipient.Name, tasks, window)
 		if err != nil {
 			return fmt.Errorf("render report for %s: %w", recipient.Address, err)
 		}
@@ -68,7 +70,7 @@ func sendReport(ctx context.Context, config Config, window, reportRange report.R
 	if err != nil {
 		return err
 	}
-	sent := sendPrepared(ctx, gmailService, prepared, state, force)
+	sent := sendPrepared(ctx, gmailService, prepared, state)
 	for i, recipient := range config.Recipients {
 		for _, result := range sent {
 			if recipient.Address == result.recipient.Address {
@@ -89,6 +91,10 @@ func existingResults(config Config, window report.ReportWindow, state *DeliveryS
 	complete := true
 	for i, recipient := range config.Recipients {
 		results[i].recipient = recipient
+		if state == nil {
+			complete = false
+			continue
+		}
 		record, ok := state.get(deliveryKey(window, config.TaskListID, recipient.Address))
 		if !ok {
 			complete = false
@@ -117,7 +123,7 @@ func resultError(results []sendResult) error {
 	return nil
 }
 
-func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []preparedEmail, state *DeliveryState, force bool) []sendResult {
+func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []preparedEmail, state *DeliveryState) []sendResult {
 	results := make([]sendResult, len(prepared))
 	slots := make(chan struct{}, 4)
 	var group sync.WaitGroup
@@ -141,12 +147,15 @@ func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []pre
 				results[index] = result
 				return
 			}
-			if err := state.beginAttempt(message.key, force); err != nil {
-				result.status = "FAILED"
-				result.err = fmt.Errorf("record send attempt: %w", err)
-				results[index] = result
-				return
+			if state != nil {
+				if err := state.beginAttempt(message.key, false); err != nil {
+					result.status = "FAILED"
+					result.err = fmt.Errorf("record send attempt: %w", err)
+					results[index] = result
+					return
+				}
 			}
+
 			id, err := google.SendRawEmail(ctx, service, message.raw)
 			record := DeliveryRecord{Status: "sent", MessageID: id}
 			result.status = "SENT"
@@ -158,10 +167,13 @@ func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []pre
 				}
 				record = DeliveryRecord{Status: strings.ToLower(result.status), Error: err.Error()}
 			}
-			if saveErr := state.set(message.key, record); saveErr != nil {
-				err = fmt.Errorf("record send result: %w", saveErr)
-				result.status = "UNCERTAIN"
+			if state != nil {
+				if saveErr := state.set(message.key, record); saveErr != nil {
+					err = fmt.Errorf("record send result: %w", saveErr)
+					result.status = "UNCERTAIN"
+				}
 			}
+
 			if err != nil {
 				result.err = err
 			} else {

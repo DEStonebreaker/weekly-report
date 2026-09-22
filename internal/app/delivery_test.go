@@ -69,7 +69,7 @@ func TestSendPreparedOverlapsAndPersistsResults(t *testing.T) {
 		prepared[i] = preparedEmail{recipient: Recipient{Address: address}, key: deliveryKey(window, "list", address), raw: raw}
 	}
 	done := make(chan []sendResult, 1)
-	go func() { done <- sendPrepared(context.Background(), service, prepared, state, false) }()
+	go func() { done <- sendPrepared(context.Background(), service, prepared, state) }()
 	for i := 0; i < 2; i++ {
 		select {
 		case <-entered:
@@ -124,7 +124,7 @@ func TestTransportFailureStaysUncertainAndIsNotRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := sendPrepared(context.Background(), service, []preparedEmail{{recipient: recipient, key: key, raw: raw}}, state, false)
+	result := sendPrepared(context.Background(), service, []preparedEmail{{recipient: recipient, key: key, raw: raw}}, state)
 	if result[0].status != "UNCERTAIN" {
 		t.Errorf("result=%#v", result[0])
 	}
@@ -143,5 +143,35 @@ func TestTransportFailureStaysUncertainAndIsNotRetried(t *testing.T) {
 	printSendResults(&output, repeated)
 	if !strings.Contains(output.String(), "UNCERTAIN") || !strings.Contains(output.String(), "1 uncertain") {
 		t.Errorf("output=%s", output.String())
+	}
+}
+
+func TestManualDeliveryReportsFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		code   int
+		status string
+	}{
+		{"rejected", 400, "FAILED"},
+		{"server failure", 500, "UNCERTAIN"},
+		{"transport failure", 0, "UNCERTAIN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				if tc.code == 0 {
+					return nil, errors.New("connection lost")
+				}
+				return jsonResponse(tc.code, `{"error":{"message":"failure"}}`), nil
+			})}
+			service, err := google.CreateGmailService(context.Background(), client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			messages := []preparedEmail{{recipient: Recipient{Address: "alice@example.com"}, raw: "prepared"}}
+			results := sendPrepared(context.Background(), service, messages, nil)
+			if results[0].status != tc.status || resultError(results) == nil {
+				t.Errorf("results=%+v, want %s and an error", results, tc.status)
+			}
+		})
 	}
 }
