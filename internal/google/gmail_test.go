@@ -1,4 +1,4 @@
-package main
+package google
 
 import (
 	"bytes"
@@ -28,9 +28,9 @@ func TestBuildRawMessage(t *testing.T) {
 		HTMLBody: "<!doctype html><html><body><p>Café &amp; tasks ✓</p></body></html>",
 	}
 
-	raw, err := buildRawMessage(email, sentAt)
+	raw, err := BuildRawMessage(email, sentAt)
 	if err != nil {
-		t.Fatalf("buildRawMessage() error = %v", err)
+		t.Fatalf("BuildRawMessage() error = %v", err)
 	}
 
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)
@@ -162,12 +162,12 @@ func TestBuildRawMessageRejectsInvalidEmail(t *testing.T) {
 			email := validEmail
 			tt.modify(&email)
 
-			_, err := buildRawMessage(email, time.Time{})
+			_, err := BuildRawMessage(email, time.Time{})
 			if err == nil {
-				t.Fatal("buildRawMessage() error = nil, want an error")
+				t.Fatal("BuildRawMessage() error = nil, want an error")
 			}
 			if !strings.Contains(err.Error(), tt.wantErrText) {
-				t.Errorf("buildRawMessage() error = %q, want it to contain %q", err, tt.wantErrText)
+				t.Errorf("BuildRawMessage() error = %q, want it to contain %q", err, tt.wantErrText)
 			}
 		})
 	}

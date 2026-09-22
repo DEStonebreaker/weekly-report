@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -10,6 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"weekly-report/internal/google"
+	"weekly-report/internal/report"
 )
 
 func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
@@ -60,7 +63,7 @@ func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
 			return jsonResponse(404, `{}`), nil
 		}
 	})}
-	tasksService, err := createTasksService(context.Background(), client)
+	tasksService, err := google.CreateTasksService(context.Background(), client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +72,7 @@ func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	lists := []TaskList{{ID: "list-id", Title: "Work"}}
+	lists := []google.TaskList{{ID: "list-id", Title: "Work"}}
 	var output bytes.Buffer
 	err = sendReport(context.Background(), config, window, window, false, state, lists, tasksService, client, &output)
 	if err == nil {
@@ -96,7 +99,7 @@ func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
 
 func TestReportPreparationFailureDoesNotSend(t *testing.T) {
 	config := Config{Sender: "sender@example.com", Subject: "Report", TaskListID: "list-id", Recipients: []Recipient{{Name: "Alice", Address: "alice@example.com"}, {Name: "Bad", Address: "bad address"}}}
-	window := ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
+	window := report.ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
 	var sends atomic.Int32
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.Contains(req.URL.Path, "/messages/send") {
@@ -105,7 +108,7 @@ func TestReportPreparationFailureDoesNotSend(t *testing.T) {
 		}
 		return jsonResponse(200, `{"items":[]}`), nil
 	})}
-	tasksService, err := createTasksService(context.Background(), client)
+	tasksService, err := google.CreateTasksService(context.Background(), client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +117,7 @@ func TestReportPreparationFailureDoesNotSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	err = sendReport(context.Background(), config, window, window, false, state, []TaskList{{ID: "list-id"}}, tasksService, client, &bytes.Buffer{})
+	err = sendReport(context.Background(), config, window, window, false, state, []google.TaskList{{ID: "list-id"}}, tasksService, client, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "prepare report") {
 		t.Errorf("error=%v", err)
 	}
@@ -125,7 +128,7 @@ func TestReportPreparationFailureDoesNotSend(t *testing.T) {
 
 func TestReportTasksUnauthorizedSuggestsInit(t *testing.T) {
 	config := Config{Sender: "sender@example.com", Subject: "Report", TaskListID: "list-id", Recipients: []Recipient{{Name: "Alice", Address: "alice@example.com"}}}
-	window := ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
+	window := report.ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
 	var taskCalls, sendCalls atomic.Int32
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path == "/tasks/v1/lists/list-id/tasks" {
@@ -135,7 +138,7 @@ func TestReportTasksUnauthorizedSuggestsInit(t *testing.T) {
 		sendCalls.Add(1)
 		return jsonResponse(200, `{"id":"unexpected"}`), nil
 	})}
-	service, err := createTasksService(context.Background(), client)
+	service, err := google.CreateTasksService(context.Background(), client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +147,7 @@ func TestReportTasksUnauthorizedSuggestsInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	err = sendReport(context.Background(), config, window, window, false, state, []TaskList{{ID: "list-id"}}, service, client, &bytes.Buffer{})
+	err = sendReport(context.Background(), config, window, window, false, state, []google.TaskList{{ID: "list-id"}}, service, client, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "weekly-report --init") {
 		t.Errorf("error=%v, want --init guidance", err)
 	}

@@ -1,9 +1,10 @@
-package main
+package google
 
 import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"mime"
 	"mime/quotedprintable"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	gmailapi "google.golang.org/api/gmail/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
@@ -23,7 +25,7 @@ type OutgoingEmail struct {
 	HTMLBody string
 }
 
-func createGmailService(
+func CreateGmailService(
 	ctx context.Context,
 	client *http.Client,
 ) (*gmailapi.Service, error) {
@@ -38,7 +40,7 @@ func createGmailService(
 	return service, nil
 }
 
-func buildRawMessage(email OutgoingEmail, sentAt time.Time) (string, error) {
+func BuildRawMessage(email OutgoingEmail, sentAt time.Time) (string, error) {
 	parsedFrom, err := mail.ParseAddress(email.From)
 	if err != nil {
 		return "", fmt.Errorf("parse email sender: %w", err)
@@ -86,14 +88,14 @@ func SendEmail(
 	service *gmailapi.Service,
 	email OutgoingEmail,
 ) (string, error) {
-	raw, err := buildRawMessage(email, time.Now())
+	raw, err := BuildRawMessage(email, time.Now())
 	if err != nil {
 		return "", err
 	}
-	return sendRawEmail(ctx, service, raw)
+	return SendRawEmail(ctx, service, raw)
 }
 
-func sendRawEmail(ctx context.Context, service *gmailapi.Service, raw string) (string, error) {
+func SendRawEmail(ctx context.Context, service *gmailapi.Service, raw string) (string, error) {
 	sent, err := service.Users.Messages.Send(
 		"me",
 		&gmailapi.Message{Raw: raw},
@@ -103,4 +105,10 @@ func sendRawEmail(ctx context.Context, service *gmailapi.Service, raw string) (s
 	}
 
 	return sent.Id, nil
+}
+
+// DeliveryUncertain reports whether Gmail may have accepted a failed request.
+func DeliveryUncertain(err error) bool {
+	var apiErr *googleapi.Error
+	return !errors.As(err, &apiErr) || apiErr.Code >= 500
 }

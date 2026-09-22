@@ -1,12 +1,13 @@
-package main
+package app
 
 import (
 	"fmt"
 	"net/mail"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"weekly-report/internal/report"
 )
 
 type Config struct {
@@ -34,14 +35,6 @@ func loadConfig(path string) (Config, error) {
 	return config, nil
 }
 
-func parseCalendarDate(field, value string) (time.Time, error) {
-	date, err := time.Parse("2006-01-02", value)
-	if err != nil || date.Format("2006-01-02") != value {
-		return time.Time{}, fmt.Errorf("%s must be a date in YYYY-MM-DD format", field)
-	}
-	return date, nil
-}
-
 type Recipient struct {
 	Name    string `toml:"name"`
 	Address string `toml:"address"`
@@ -51,11 +44,11 @@ func (config Config) Validate() error {
 	if strings.TrimSpace(config.TaskListID) == "" {
 		return fmt.Errorf("task_list_id is empty; use --list-task-lists to find an ID")
 	}
-	start, err := parseCalendarDate("start_date", config.StartDate)
+	start, err := report.ParseCalendarDate("start_date", config.StartDate)
 	if err != nil {
 		return err
 	}
-	end, err := parseCalendarDate("end_date", config.EndDate)
+	end, err := report.ParseCalendarDate("end_date", config.EndDate)
 	if err != nil {
 		return err
 	}

@@ -1,4 +1,4 @@
-package main
+package google
 
 import (
 	"bufio"
@@ -19,7 +19,7 @@ import (
 	tasksapi "google.golang.org/api/tasks/v1"
 )
 
-func loadOAuthConfig(credentialsPath string) (*oauth2.Config, error) {
+func LoadOAuthConfig(credentialsPath string) (*oauth2.Config, error) {
 	credentials, err := os.ReadFile(credentialsPath)
 	if err != nil {
 		return nil, fmt.Errorf("read client secret file: %w", err)
@@ -36,7 +36,7 @@ func loadOAuthConfig(credentialsPath string) (*oauth2.Config, error) {
 	return config, nil
 }
 
-func savedGoogleClient(
+func SavedGoogleClient(
 	ctx context.Context,
 	config *oauth2.Config,
 	tokenPath string) (*http.Client, error) {
@@ -55,7 +55,7 @@ func savedGoogleClient(
 	return config.Client(ctx, usable), nil
 }
 
-func initializeToken(ctx context.Context, config *oauth2.Config, tokenPath string, authorize func(context.Context, *oauth2.Config) (*oauth2.Token, error)) error {
+func InitializeToken(ctx context.Context, config *oauth2.Config, tokenPath string, authorize func(context.Context, *oauth2.Config) (*oauth2.Token, error)) error {
 	token, err := authorize(ctx, config)
 	if err != nil {
 		return err
@@ -72,7 +72,7 @@ func initializeToken(ctx context.Context, config *oauth2.Config, tokenPath strin
 	return saveTokenFile(tokenPath, token)
 }
 
-func withAuthHint(err error) error {
+func WithAuthHint(err error) error {
 	var apiErr *googleapi.Error
 	if errors.As(err, &apiErr) && apiErr.Code == http.StatusUnauthorized {
 		return fmt.Errorf("%w; run weekly-report --init", err)
@@ -129,7 +129,7 @@ func saveTokenFile(path string, token *oauth2.Token) error {
 	return nil
 }
 
-func authorizeWithGoogle(
+func AuthorizeWithGoogle(
 	ctx context.Context,
 	config *oauth2.Config,
 ) (*oauth2.Token, error) {

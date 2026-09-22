@@ -1,8 +1,7 @@
-package main
+package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,8 +10,10 @@ import (
 	"time"
 
 	gmailapi "google.golang.org/api/gmail/v1"
-	"google.golang.org/api/googleapi"
 	tasksapi "google.golang.org/api/tasks/v1"
+
+	"weekly-report/internal/google"
+	"weekly-report/internal/report"
 )
 
 type preparedEmail struct {
@@ -28,7 +29,7 @@ type sendResult struct {
 	err       error
 }
 
-func sendReport(ctx context.Context, config Config, window, reportRange ReportWindow, force bool, state *DeliveryState, lists []TaskList, tasksService *tasksapi.Service, client *http.Client, output io.Writer) error {
+func sendReport(ctx context.Context, config Config, window, reportRange report.ReportWindow, force bool, state *DeliveryState, lists []google.TaskList, tasksService *tasksapi.Service, client *http.Client, output io.Writer) error {
 	listID, err := selectTaskList(lists, config.TaskListID)
 	if err != nil {
 		return err
@@ -46,24 +47,24 @@ func sendReport(ctx context.Context, config Config, window, reportRange ReportWi
 	}
 	dueMin := reportRange.Start
 	dueMax := reportRange.End.AddDate(0, 0, 1).Add(-time.Second)
-	tasks, err := GetTasks(ctx, tasksService, listID, GetTasksOptions{DueMin: &dueMin, DueMax: &dueMax})
+	tasks, err := google.GetTasks(ctx, tasksService, listID, google.GetTasksOptions{DueMin: &dueMin, DueMax: &dueMax})
 	if err != nil {
-		return fmt.Errorf("get tasks: %w", withAuthHint(err))
+		return fmt.Errorf("get tasks: %w", google.WithAuthHint(err))
 	}
-	tasks = SortByDueDate(tasks)
+	tasks = report.SortByDueDate(tasks)
 	prepared := make([]preparedEmail, 0, len(pending))
 	for _, recipient := range pending {
-		body, err := RenderReport(recipient.Name, tasks, reportRange)
+		body, err := report.RenderReport(recipient.Name, tasks, reportRange)
 		if err != nil {
 			return fmt.Errorf("render report for %s: %w", recipient.Address, err)
 		}
-		raw, err := buildRawMessage(OutgoingEmail{From: config.Sender, To: recipient.Address, Subject: config.Subject, HTMLBody: body}, time.Now())
+		raw, err := google.BuildRawMessage(google.OutgoingEmail{From: config.Sender, To: recipient.Address, Subject: config.Subject, HTMLBody: body}, time.Now())
 		if err != nil {
 			return fmt.Errorf("prepare report for %s: %w", recipient.Address, err)
 		}
 		prepared = append(prepared, preparedEmail{recipient, deliveryKey(window, listID, recipient.Address), raw})
 	}
-	gmailService, err := createGmailService(ctx, client)
+	gmailService, err := google.CreateGmailService(ctx, client)
 	if err != nil {
 		return err
 	}
@@ -83,7 +84,7 @@ func sendReport(ctx context.Context, config Config, window, reportRange ReportWi
 	return resultError(results)
 }
 
-func existingResults(config Config, window ReportWindow, state *DeliveryState) ([]sendResult, bool) {
+func existingResults(config Config, window report.ReportWindow, state *DeliveryState) ([]sendResult, bool) {
 	results := make([]sendResult, len(config.Recipients))
 	complete := true
 	for i, recipient := range config.Recipients {
@@ -146,14 +147,13 @@ func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []pre
 				results[index] = result
 				return
 			}
-			id, err := sendRawEmail(ctx, service, message.raw)
+			id, err := google.SendRawEmail(ctx, service, message.raw)
 			record := DeliveryRecord{Status: "sent", MessageID: id}
 			result.status = "SENT"
 			if err != nil {
-				err = withAuthHint(err)
+				err = google.WithAuthHint(err)
 				result.status = "FAILED"
-				var apiErr *googleapi.Error
-				if !errors.As(err, &apiErr) || apiErr.Code >= 500 {
+				if google.DeliveryUncertain(err) {
 					result.status = "UNCERTAIN"
 				}
 				record = DeliveryRecord{Status: strings.ToLower(result.status), Error: err.Error()}

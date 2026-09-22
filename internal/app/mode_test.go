@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -35,7 +35,7 @@ func TestInitModePreservesTokenOnFailedAuthorization(t *testing.T) {
 		called = true
 		return nil, errors.New("denied")
 	}
-	err := runModeInDir(context.Background(), CLI{Init: true}, time.Now(), &bytes.Buffer{}, dir, authorize)
+	err := runModeInDir(context.Background(), Options{Init: true}, time.Now(), &bytes.Buffer{}, dir, authorize)
 	if !called || err == nil || !strings.Contains(err.Error(), "denied") {
 		t.Errorf("authorize called=%v error=%v", called, err)
 	}
@@ -55,7 +55,7 @@ func TestInitModeSavesAuthorizedTokenWithoutConfig(t *testing.T) {
 	authorize := func(context.Context, *oauth2.Config) (*oauth2.Token, error) {
 		return &oauth2.Token{AccessToken: "new-access", RefreshToken: "new-refresh", Expiry: time.Now().Add(time.Hour)}, nil
 	}
-	if err := runModeInDir(context.Background(), CLI{Init: true}, time.Now(), &output, dir, authorize); err != nil {
+	if err := runModeInDir(context.Background(), Options{Init: true}, time.Now(), &output, dir, authorize); err != nil {
 		t.Fatal(err)
 	}
 	token, err := loadToken(filepath.Join(dir, "token.json"))
@@ -90,7 +90,7 @@ func TestListTaskListsModeWithoutConfig(t *testing.T) {
 		t.Fatal("unexpected interactive authorization")
 		return nil, nil
 	}
-	if err := runModeInDir(ctx, CLI{ListTaskLists: true}, time.Now(), &output, dir, authorize); err != nil {
+	if err := runModeInDir(ctx, Options{ListTaskLists: true}, time.Now(), &output, dir, authorize); err != nil {
 		t.Fatal(err)
 	}
 	if requests != 1 {
@@ -105,7 +105,7 @@ func TestListTaskListsModeWithoutConfig(t *testing.T) {
 }
 
 func TestSavedRefreshFailureSuggestsInitInListAndReportModes(t *testing.T) {
-	for _, cli := range []CLI{{ListTaskLists: true}, {}} {
+	for _, cli := range []Options{{ListTaskLists: true}, {}} {
 		name := "list"
 		if !cli.ListTaskLists {
 			name = "report"

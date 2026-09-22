@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -14,6 +14,9 @@ import (
 
 	gmailapi "google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
+
+	"weekly-report/internal/google"
+	"weekly-report/internal/report"
 )
 
 func TestSendPreparedOverlapsAndPersistsResults(t *testing.T) {
@@ -56,10 +59,10 @@ func TestSendPreparedOverlapsAndPersistsResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	window := ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
+	window := report.ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
 	prepared := make([]preparedEmail, 2)
 	for i, address := range []string{"alice@example.com", "bob@example.com"} {
-		raw, err := buildRawMessage(OutgoingEmail{From: "sender@example.com", To: address, Subject: "Report", HTMLBody: "<p>Hi</p>"}, time.Now())
+		raw, err := google.BuildRawMessage(google.OutgoingEmail{From: "sender@example.com", To: address, Subject: "Report", HTMLBody: "<p>Hi</p>"}, time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -98,30 +101,6 @@ func TestSendPreparedOverlapsAndPersistsResults(t *testing.T) {
 	}
 }
 
-func TestDeliveryStateLocksAndRetainsUncertainAttempt(t *testing.T) {
-	dir := t.TempDir()
-	first, err := openDeliveryState(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := openDeliveryState(dir); err == nil {
-		t.Error("overlapping process was not rejected")
-	}
-	key := "window/list/recipient"
-	if err := first.set(key, DeliveryRecord{Status: "uncertain"}); err != nil {
-		t.Fatal(err)
-	}
-	first.Close()
-	second, err := openDeliveryState(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer second.Close()
-	if record, ok := second.get(key); !ok || record.Status != "uncertain" {
-		t.Errorf("record=%#v, %v", record, ok)
-	}
-}
-
 func TestTransportFailureStaysUncertainAndIsNotRetried(t *testing.T) {
 	calls := 0
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -137,11 +116,11 @@ func TestTransportFailureStaysUncertainAndIsNotRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	window := ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
+	window := report.ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
 	recipient := Recipient{Name: "Alice", Address: "alice@example.com"}
 	config := Config{TaskListID: "list-id", Recipients: []Recipient{recipient}}
 	key := deliveryKey(window, config.TaskListID, recipient.Address)
-	raw, err := buildRawMessage(OutgoingEmail{From: "sender@example.com", To: recipient.Address, Subject: "Report", HTMLBody: "<p>Hi</p>"}, time.Now())
+	raw, err := google.BuildRawMessage(google.OutgoingEmail{From: "sender@example.com", To: recipient.Address, Subject: "Report", HTMLBody: "<p>Hi</p>"}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

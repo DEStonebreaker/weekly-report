@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"encoding/json"
@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"weekly-report/internal/report"
 )
 
 type DeliveryRecord struct {
@@ -65,7 +67,7 @@ func (state *DeliveryState) Close() error {
 	return err
 }
 
-func deliveryKey(window ReportWindow, listID, address string) string {
+func deliveryKey(window report.ReportWindow, listID, address string) string {
 	return window.Start.Format("2006-01-02") + "\x00" + window.End.Format("2006-01-02") + "\x00" + listID + "\x00" + strings.ToLower(address)
 }
 

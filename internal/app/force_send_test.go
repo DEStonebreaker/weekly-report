@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -15,37 +15,9 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-)
 
-func TestSendCommandParsing(t *testing.T) {
-	for _, tc := range []struct {
-		args              []string
-		force, init, list bool
-		wantErr           bool
-	}{
-		{args: nil},
-		{args: []string{"send"}, force: true},
-		{args: []string{"--init"}, init: true},
-		{args: []string{"--list-task-lists"}, list: true},
-		{args: []string{"send", "--init"}, wantErr: true},
-		{args: []string{"send", "--list-task-lists"}, wantErr: true},
-	} {
-		cli, err := parseCLI(tc.args)
-		if tc.wantErr {
-			if err == nil {
-				t.Errorf("%v: wanted error", tc.args)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("%v: %v", tc.args, err)
-			continue
-		}
-		if cli.forceSend != tc.force || cli.Init != tc.init || cli.ListTaskLists != tc.list {
-			t.Errorf("%v: %+v", tc.args, cli)
-		}
-	}
-}
+	"weekly-report/internal/report"
+)
 
 func TestForceSendMidWindowRepeatAndNormalAfter(t *testing.T) {
 	dir := t.TempDir()
@@ -73,7 +45,7 @@ address="carol@example.com"
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 22, 14, 0, 0, 0, time.FixedZone("EDT", -4*3600))
-	window := ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
+	window := report.ReportWindow{Start: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
 	state, err := openDeliveryState(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -158,10 +130,7 @@ address="carol@example.com"
 		return nil, nil
 	}
 	var output bytes.Buffer
-	cli, err := parseCLI([]string{"send"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cli := Options{ForceSend: true}
 	err = runModeInDir(ctx, cli, now, &output, dir, authorize)
 	if err == nil {
 		t.Fatal("force send with failures returned nil")
@@ -212,7 +181,7 @@ address="carol@example.com"
 	priorTasks, priorLists := taskCalls, listCalls
 	mu.Unlock()
 	output.Reset()
-	if err := runModeInDir(ctx, CLI{}, now, &output, dir, authorize); err != nil {
+	if err := runModeInDir(ctx, Options{}, now, &output, dir, authorize); err != nil {
 		t.Fatalf("normal after force: %v", err)
 	}
 	mu.Lock()
@@ -246,10 +215,7 @@ address="alice@example.com"
 		t.Fatal("unexpected OAuth")
 		return nil, nil
 	}
-	cli, err := parseCLI([]string{"send"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cli := Options{ForceSend: true}
 	for _, date := range []string{"2026-09-18", "2026-09-26"} {
 		now, _ := time.Parse("2006-01-02", date)
 		err := runModeInDir(context.Background(), cli, now, &bytes.Buffer{}, dir, authorize)

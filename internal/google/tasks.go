@@ -1,14 +1,15 @@
-package main
+package google
 
 import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"time"
 
 	"google.golang.org/api/option"
 	tasksapi "google.golang.org/api/tasks/v1"
+
+	"weekly-report/internal/report"
 )
 
 type TaskList struct {
@@ -16,20 +17,12 @@ type TaskList struct {
 	Title string
 }
 
-type Task struct {
-	ID          string
-	Title       string
-	DueDate     *time.Time
-	WebViewLink string
-	Notes       string
-}
-
 type GetTasksOptions struct {
 	DueMax *time.Time
 	DueMin *time.Time
 }
 
-func createTasksService(ctx context.Context, client *http.Client) (*tasksapi.Service, error) {
+func CreateTasksService(ctx context.Context, client *http.Client) (*tasksapi.Service, error) {
 	service, err := tasksapi.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		return nil, fmt.Errorf("create Google Tasks service: %w", err)
@@ -43,7 +36,7 @@ func GetTasks(
 	service *tasksapi.Service,
 	taskListID string,
 	opts GetTasksOptions,
-) ([]Task, error) {
+) ([]report.Task, error) {
 	call := service.Tasks.List(taskListID).ShowCompleted(false)
 	if opts.DueMin != nil {
 		call.DueMin(opts.DueMin.Format(time.RFC3339))
@@ -52,7 +45,7 @@ func GetTasks(
 		call.DueMax(opts.DueMax.Format(time.RFC3339))
 	}
 
-	var tasks []Task
+	var tasks []report.Task
 	err := call.Pages(ctx, func(page *tasksapi.Tasks) error {
 		for _, apiTask := range page.Items {
 			if apiTask == nil {
@@ -95,40 +88,21 @@ func GetTaskLists(ctx context.Context, service *tasksapi.Service) ([]TaskList, e
 	return taskLists, nil
 }
 
-func taskFromAPI(apiTask *tasksapi.Task) (Task, error) {
+func taskFromAPI(apiTask *tasksapi.Task) (report.Task, error) {
 	var dueDate *time.Time
 	if apiTask.Due != "" {
 		parsed, err := time.Parse(time.RFC3339, apiTask.Due)
 		if err != nil {
-			return Task{}, fmt.Errorf("parse due date for task %q: %w", apiTask.Id, err)
+			return report.Task{}, fmt.Errorf("parse due date for task %q: %w", apiTask.Id, err)
 		}
 		dueDate = &parsed
 	}
 
-	return Task{
+	return report.Task{
 		ID:          apiTask.Id,
 		Title:       apiTask.Title,
 		DueDate:     dueDate,
 		WebViewLink: apiTask.WebViewLink,
 		Notes:       apiTask.Notes,
 	}, nil
-}
-
-func SortByDueDate(tasks []Task) []Task {
-	sorted := slices.Clone(tasks)
-
-	slices.SortFunc(sorted, func(a, b Task) int {
-		switch {
-		case a.DueDate == nil && b.DueDate == nil:
-			return 0
-		case a.DueDate == nil:
-			return 1
-		case b.DueDate == nil:
-			return -1
-		default:
-			return a.DueDate.Compare(*b.DueDate)
-		}
-	})
-
-	return sorted
 }
