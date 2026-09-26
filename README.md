@@ -4,14 +4,14 @@ Weekly Report emails a personalized report of upcoming tasks from one Google Tas
 
 ## Setup
 
-Place Google OAuth `credentials.json` in the `weekly-tasks` directory under your OS user configuration directory. On macOS this is typically `~/Library/Application Support/weekly-tasks/`. Run:
+Place Google OAuth **Desktop app** `credentials.json` in the `weekly-tasks` directory under your OS user configuration directory. On macOS this is typically `~/Library/Application Support/weekly-tasks/`. Run:
 
 ```sh
 weekly-report --init
 weekly-report --list-task-lists
 ```
 
-`--init` opens an interactive Google authorization flow and saves `token.json` in the same directory. It works without a report config. Paste the full browser redirect URL when prompted. `--list-task-lists` prints each list's title and Google ID using the saved token. Neither this command nor a normal report run starts interactive authorization. If the token is missing or revoked, run `--init` again.
+`--init` opens an interactive Google authorization flow and saves `token.json` in the same directory. It works without a report config. Open the printed URL in a browser on the same machine and approve access within five minutes. A temporary loopback HTTP server receives the callback automatically, so there is no redirect URL to paste. The callback uses an available local port; no redirect URL needs to be added to `credentials.json` or `config.toml`. `--list-task-lists` prints each list's title and Google ID using the saved token. Neither this command nor a normal report run starts interactive authorization. If the token is missing or revoked, run `--init` again.
 
 Create `config.toml` in that directory:
 
