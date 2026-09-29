@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime/quotedprintable"
 	"net/http"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,7 +127,11 @@ func TestScheduledWakeBeforeTodaysTriggerSendsOnce(t *testing.T) {
 	wake := time.Date(2026, 9, 22, 8, 0, 0, 0, time.Local)
 	for i := 0; i < 2; i++ {
 		status, err := scheduledDelivery(ctx, service, wake)
-		if err != nil || status.Status != "complete" || len(status.Results) != 1 {
+		want := "complete"
+		if i == 1 {
+			want = "already-sent"
+		}
+		if err != nil || status.Status != want || len(status.Results) != 1 {
 			t.Fatalf("wake delivery status=%+v, error=%v", status, err)
 		}
 	}
@@ -144,6 +152,67 @@ func TestScheduledWakeBeforeTodaysTriggerSendsOnce(t *testing.T) {
 	}
 }
 
+func TestScheduledEmptyTasksDoesNotSendOrConsumeAttempt(t *testing.T) {
+	service, _ := desktopServiceFixture(t)
+	response := `{"items":[]}`
+	reads, sends := 0, 0
+	client := &http.Client{Transport: desktopTransport(func(r *http.Request) (*http.Response, error) {
+		body := "{}"
+		switch r.URL.Path {
+		case "/tasks/v1/users/@me/lists":
+			body = `{"items":[{"id":"list","title":"Work"}]}`
+		case "/tasks/v1/lists/list/tasks":
+			reads++
+			if got := r.URL.Query().Get("dueMin"); got != "2026-09-21T00:00:00Z" {
+				t.Errorf("dueMin=%s", got)
+			}
+			if got := r.URL.Query().Get("dueMax"); got != "2026-09-28T00:00:00Z" {
+				t.Errorf("dueMax=%s", got)
+			}
+			body = response
+		case "/gmail/v1/users/me/messages/send":
+			sends++
+			var payload struct{ Raw string }
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode sent message: %v", err)
+			} else if raw, err := base64.RawURLEncoding.DecodeString(payload.Raw); err != nil {
+				t.Errorf("decode raw message: %v", err)
+			} else if message, err := mail.ReadMessage(bytes.NewReader(raw)); err != nil {
+				t.Errorf("parse sent message: %v", err)
+			} else if html, err := io.ReadAll(quotedprintable.NewReader(message.Body)); err != nil {
+				t.Errorf("decode HTML: %v", err)
+			} else if !strings.Contains(string(html), "Start boundary") || !strings.Contains(string(html), "End boundary") {
+				t.Errorf("sent HTML omitted a boundary task")
+			}
+			body = `{"id":"sent-after-tasks"}`
+		default:
+			t.Errorf("unexpected request: %s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
+	now := time.Date(2026, 9, 22, 9, 0, 0, 0, time.Local)
+	for _, empty := range []string{`{"items":[]}`, `{"items":[{"id":"undated","title":"Undated"}]}`, `{"items":[{"id":"outside","title":"Outside","due":"2026-09-28T00:00:00Z"}]}`} {
+		response = empty
+		status, err := scheduledDelivery(ctx, service, now)
+		if err != nil || status.Status != "no-tasks" || status.TaskCount == nil || *status.TaskCount != 0 || sends != 0 {
+			t.Fatalf("empty scheduled run: status=%+v, sends=%d, error=%v", status, sends, err)
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(service.CredentialsPath()), "state.json")); !os.IsNotExist(err) {
+			t.Fatalf("empty run recorded delivery state: %v", err)
+		}
+	}
+	response = `{"items":[{"id":"start","title":"Start boundary","due":"2026-09-21T00:00:00Z"},{"id":"end","title":"End boundary","due":"2026-09-27T00:00:00Z"}]}`
+	status, err := scheduledDelivery(ctx, service, now)
+	if err != nil || status.Status != "complete" || status.TaskCount == nil || *status.TaskCount != 2 || sends != 1 || reads != 4 {
+		t.Fatalf("retry with tasks: status=%+v, reads=%d, sends=%d, error=%v", status, reads, sends, err)
+	}
+	status, err = scheduledDelivery(ctx, service, now)
+	if err != nil || status.Status != "already-sent" || status.TaskCount != nil || status.Results[0].MessageID != "sent-after-tasks" || reads != 4 || sends != 1 {
+		t.Fatalf("deduped run: status=%+v, reads=%d, sends=%d, error=%v", status, reads, sends, err)
+	}
+}
+
 func TestForceSendUsesSelectedDatesWithoutChangingScheduledAttempts(t *testing.T) {
 	service, config := desktopServiceFixture(t)
 	config.StartDate = "2026-09-19"
@@ -159,10 +228,17 @@ func TestForceSendUsesSelectedDatesWithoutChangingScheduledAttempts(t *testing.T
 		case "/tasks/v1/users/@me/lists":
 			body = `{"items":[{"id":"list","title":"Work"}]}`
 		case "/tasks/v1/lists/list/tasks":
-			due := "2026-09-26T00:00:00Z"
-			if r.URL.Query().Get("dueMin") <= due && due < r.URL.Query().Get("dueMax") {
-				body = `{"items":[{"id":"task","title":"Boundary task","due":"2026-09-26T00:00:00Z"}]}`
+			min, max := r.URL.Query().Get("dueMin"), r.URL.Query().Get("dueMax")
+			items := []string{}
+			for _, task := range []struct{ due, item string }{
+				{"2026-09-22T00:00:00Z", `{"id":"first","title":"First window task","due":"2026-09-22T00:00:00Z"}`},
+				{"2026-09-26T00:00:00Z", `{"id":"boundary","title":"Boundary task","due":"2026-09-26T00:00:00Z"}`},
+			} {
+				if min <= task.due && task.due < max {
+					items = append(items, task.item)
+				}
 			}
+			body = `{"items":[` + strings.Join(items, ",") + `]}`
 		case "/gmail/v1/users/me/messages/send":
 			sends++
 			body = `{"id":"sent"}`

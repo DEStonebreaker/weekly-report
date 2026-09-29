@@ -51,11 +51,26 @@ func systemScheduleActive(config app.Config) bool {
 	if err != nil {
 		return false
 	}
-	return launchAgentMatches(actual, executablePath, logPath, hour, minute)
+	return launchAgentReady(actual, executablePath, logPath, hour, minute)
 }
 
 func launchAgentMatches(actual []byte, executable, logPath string, hour, minute int) bool {
 	return bytes.Equal(actual, renderLaunchAgent(executable, logPath, hour, minute))
+}
+
+func launchAgentReady(actual []byte, executable, logPath string, hour, minute int) bool {
+	return launchAgentMatches(actual, executable, logPath, hour, minute) && executableReady(executable) == nil
+}
+
+func executableReady(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("Weekly Report app executable is unavailable at %q: %w; reopen the installed app to repair automatic delivery", path, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+		return fmt.Errorf("Weekly Report app executable at %q is not executable; reinstall the app to repair automatic delivery", path)
+	}
+	return nil
 }
 
 func syncLaunchAgent(home string, config app.Config, executable func() (string, error), run func(...string) ([]byte, error)) (bool, error) {
@@ -81,6 +96,9 @@ func syncLaunchAgent(home string, config app.Config, executable func() (string, 
 	}
 	if !strings.Contains(executablePath, ".app/Contents/MacOS/") {
 		return false, fmt.Errorf("automatic delivery can be enabled in the packaged app; build and open Weekly Report.app first")
+	}
+	if err := executableReady(executablePath); err != nil {
+		return false, err
 	}
 	logDir := filepath.Join(home, "Library", "Logs", "Weekly Report")
 	if err := os.MkdirAll(logDir, 0700); err != nil {

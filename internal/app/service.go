@@ -189,35 +189,56 @@ func (s *Service) SendManualReport(ctx context.Context, options report.RangeOpti
 // SendScheduledReport holds the process lock across preparation and delivery, and
 // exits without network access outside the schedule or after all prior attempts.
 func (s *Service) SendScheduledReport(ctx context.Context, now time.Time) ([]DeliveryResult, error) {
+	outcome, err := s.SendScheduledReportDetailed(ctx, now)
+	return outcome.Results, err
+}
+
+// ScheduledReportOutcome includes only non-sensitive diagnostics for automatic runs.
+type ScheduledReportOutcome struct {
+	Results      []DeliveryResult
+	Window       report.ReportWindow
+	TaskCount    int
+	TasksQueried bool
+	NoTasks      bool
+}
+
+func (s *Service) SendScheduledReportDetailed(ctx context.Context, now time.Time) (ScheduledReportOutcome, error) {
+	var outcome ScheduledReportOutcome
 	config, err := s.LoadSettings()
 	if err != nil {
-		return nil, err
+		return outcome, err
 	}
 	window, err := activeWindow(config, now)
 	if err != nil {
-		return nil, err
+		return outcome, err
 	}
+	outcome.Window = window
 	if window.Start.IsZero() {
-		return nil, nil
+		return outcome, nil
 	}
 	state, err := openDeliveryState(s.appDir)
 	if err != nil {
-		return nil, err
+		return outcome, err
 	}
 	defer state.Close()
 	if results, complete := existingResults(config, window, state); complete {
-		return deliveryResults(results), resultError(results)
+		outcome.Results = deliveryResults(results)
+		return outcome, resultError(results)
 	}
 	client, err := s.googleClient(ctx)
 	if err != nil {
-		return nil, err
+		return outcome, err
 	}
 	tasks, lists, err := listTaskLists(ctx, client)
 	if err != nil {
-		return nil, err
+		return outcome, err
 	}
-	results, err := deliverReport(ctx, config, window, state, lists, tasks, client)
-	return deliveryResults(results), err
+	results, count, noTasks, err := deliverReportDetailed(ctx, config, window, state, lists, tasks, client)
+	outcome.Results = deliveryResults(results)
+	outcome.TaskCount = count
+	outcome.TasksQueried = count > 0 || noTasks
+	outcome.NoTasks = noTasks
+	return outcome, err
 }
 
 // DeliveryResult preserves recipient order and can be serialized across a UI bridge.

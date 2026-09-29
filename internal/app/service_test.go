@@ -451,3 +451,51 @@ func TestServiceScheduledNoOpNeedsNoGoogleCredentials(t *testing.T) {
 		t.Fatalf("prior attempt: %+v %v", results, err)
 	}
 }
+
+func TestScheduledNoTasksPreservesPriorFailure(t *testing.T) {
+	s, config := serviceFixture(t)
+	config.Recipients = append(config.Recipients, Recipient{Name: "Bob", Address: "bob@example.com"})
+	if err := s.SaveSettings(config); err != nil {
+		t.Fatal(err)
+	}
+	window, err := activeWindow(config, serviceToday)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := openDeliveryState(s.appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.set(deliveryKey(window, config.TaskListID, config.Recipients[0].Address), DeliveryRecord{Status: "failed", Error: "previous rejection"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sends := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/tasks/v1/users/@me/lists":
+			return jsonResponse(200, `{"items":[{"id":"list-id","title":"Work"}]}`), nil
+		case "/tasks/v1/lists/list-id/tasks":
+			return jsonResponse(200, `{"items":[]}`), nil
+		case "/gmail/v1/users/me/messages/send":
+			sends++
+		}
+		t.Errorf("unexpected request: %s", req.URL)
+		return jsonResponse(400, `{}`), nil
+	})}
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
+	outcome, err := s.SendScheduledReportDetailed(ctx, serviceToday)
+	if err == nil || !outcome.NoTasks || !outcome.TasksQueried || len(outcome.Results) != 1 || outcome.Results[0].Status != "FAILED" || sends != 0 {
+		t.Fatalf("outcome=%+v sends=%d error=%v", outcome, sends, err)
+	}
+	state, err = openDeliveryState(s.appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	if _, attempted := state.get(deliveryKey(window, config.TaskListID, config.Recipients[1].Address)); attempted {
+		t.Fatal("pending recipient consumed an attempt despite no tasks")
+	}
+}

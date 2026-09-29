@@ -8,12 +8,23 @@ type TaskList = {ID: string; Title: string};
 type Preview = {sender: string; subject: string; taskListId: string; startDate: string; endDate: string; messages: {recipient: {name: string; address: string}; html: string}[]};
 type Progress = {preparationId: string; completed: number; total: number; result?: {recipient: {name: string; address: string}; status: string; error?: string}};
 type Delivery = {recipient: {name: string; address: string}; status: string; messageId?: string; error?: string};
-type ScheduledRun = {time: string; status: string; results?: Delivery[]; error?: string};
+type ScheduledRun = {time: string; status: string; source?: string; startDate?: string; endDate?: string; taskCount?: number; results?: Delivery[]; error?: string};
 type SchedulerStatus = {active: boolean; error?: string};
 type SectionId = 'connect-google' | 'report-settings' | 'preview-send';
 type PreviewMode = 'manual' | 'force';
 
 const sectionIds: SectionId[] = ['connect-google', 'report-settings', 'preview-send'];
+
+function scheduledStatusLabel(status: string): string {
+  switch (status) {
+    case 'complete': return 'Delivery completed';
+    case 'already-sent': return 'Already sent for this window';
+    case 'no-tasks': return 'No tasks found; no email sent';
+    case 'no-window': return 'Outside report dates';
+    case 'schedule-error': return 'Schedule needs repair';
+    default: return status;
+  }
+}
 
 function emptySettings(): Settings {
   const today = new Date();
@@ -220,6 +231,8 @@ export default function App() {
       setScheduledRun(event);
       if (event.status === 'error' || event.status === 'schedule-error') setError(event.error ?? 'Scheduled delivery failed.');
       else if (event.status === 'complete') setNotice('Automatic delivery ran. See the latest scheduled result below.');
+      else if (event.status === 'already-sent') setNotice('This report window was already sent; no new email was sent.');
+      else if (event.status === 'no-tasks') setNotice('No dated tasks were found for this report window; no email was sent.');
     });
     EventsOn('schedule-status', (event: SchedulerStatus) => {
       setSchedulerActive(event.active);
@@ -344,7 +357,7 @@ export default function App() {
         {results.length > 0 && <div className="results" aria-labelledby="results-heading"><h3 id="results-heading">Delivery results</h3>{results.map((result, index) => <div className={`result-row ${result.status.toLowerCase()}`} key={`${result.recipient.address}-${index}`}><span className="result-icon" aria-hidden="true">{result.status === 'SENT' ? '✓' : result.status === 'UNCERTAIN' ? '?' : '!'}</span><div><strong>{result.recipient.name} · {result.recipient.address}</strong><span>{result.status === 'SENT' ? 'Sent successfully' : result.status === 'UNCERTAIN' ? 'Delivery is uncertain; check Gmail Sent Mail before retrying' : result.status === 'SKIPPED' ? 'Not sent' : 'Failed to send'}{result.error ? ` — ${result.error}` : ''}</span></div><span className="result-status">{result.status}</span></div>)}</div>}
       </section>
 
-      {scheduledRun && <section className="panel scheduled-result" aria-labelledby="scheduled-result-heading"><div className="section-heading"><h2 id="scheduled-result-heading">Latest automatic run</h2><span className={`status ${scheduledRun.status === 'complete' ? '' : 'pending'}`}>{scheduledRun.status}</span></div><p>{new Date(scheduledRun.time).toLocaleString()}</p>{scheduledRun.error && <p className="schedule-error">{scheduledRun.error}</p>}{scheduledRun.results?.map((result, index) => <div className={`result-row ${result.status.toLowerCase()}`} key={`${result.recipient.address}-${index}`}><div className="result-icon" aria-hidden="true">{result.status === 'SENT' ? '✓' : result.status === 'UNCERTAIN' ? '?' : '!'}</div><div><strong>{result.recipient.name} · {result.recipient.address}</strong><span>{result.status}{result.error ? ` — ${result.error}` : ''}</span></div><span className="result-status">{result.status}</span></div>)}</section>}
+      {scheduledRun && <section className="panel scheduled-result" aria-labelledby="scheduled-result-heading"><div className="section-heading"><h2 id="scheduled-result-heading">Latest automatic run</h2><span className={`status ${scheduledRun.status === 'complete' || scheduledRun.status === 'already-sent' ? '' : 'pending'}`}>{scheduledStatusLabel(scheduledRun.status)}</span></div><p>{new Date(scheduledRun.time).toLocaleString()}{scheduledRun.source ? ` · ${scheduledRun.source === 'launchd' ? 'Background schedule' : scheduledRun.source === 'gui-catch-up' ? 'App catch-up' : scheduledRun.source}` : ''}{scheduledRun.startDate && scheduledRun.endDate ? ` · ${scheduledRun.startDate} through ${scheduledRun.endDate}` : ''}{scheduledRun.taskCount !== undefined ? ` · ${scheduledRun.taskCount} dated task${scheduledRun.taskCount === 1 ? '' : 's'}` : ''}</p>{scheduledRun.error && <p className="schedule-error">{scheduledRun.error}</p>}{scheduledRun.results?.map((result, index) => <div className={`result-row ${result.status.toLowerCase()}`} key={`${result.recipient.address}-${index}`}><div className="result-icon" aria-hidden="true">{result.status === 'SENT' || result.status === 'SKIPPED' && !result.error ? '✓' : result.status === 'UNCERTAIN' ? '?' : '!'}</div><div><strong>{result.recipient.name} · {result.recipient.address}</strong><span>{result.status === 'SKIPPED' && !result.error ? 'Already sent in this report window' : result.status}{result.error ? ` — ${result.error}` : ''}</span></div><span className="result-status">{result.status}</span></div>)}</section>}
       </div>
     </main>
   );
