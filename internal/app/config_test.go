@@ -44,6 +44,21 @@ func TestConfigValidate(t *testing.T) {
 			wantErrText: "window days",
 		},
 		{
+			name:        "enabled schedule requires time",
+			modify:      func(config *Config) { config.ScheduleEnabled = true },
+			wantErrText: "schedule time is required",
+		},
+		{
+			name:        "invalid schedule time",
+			modify:      func(config *Config) { config.ScheduleTime = "9:15" },
+			wantErrText: "HH:MM",
+		},
+		{
+			name:        "valid schedule time",
+			modify:      func(config *Config) { config.ScheduleEnabled = true; config.ScheduleTime = "09:15" },
+			wantErrText: "",
+		},
+		{
 			name:        "no recipients",
 			modify:      func(config *Config) { config.Recipients = nil },
 			wantErrText: "at least one recipient",

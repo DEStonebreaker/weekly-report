@@ -10,7 +10,7 @@ import (
 )
 
 // receiveAuthorizationCode starts the listener before publishing its redirect URL.
-func receiveAuthorizationCode(ctx context.Context, state string, authorize func(string)) (string, error) {
+func receiveAuthorizationCode(ctx context.Context, state string, authorize func(string) error) (string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", fmt.Errorf("start OAuth callback listener: %w", err)
@@ -54,7 +54,9 @@ func receiveAuthorizationCode(ctx context.Context, state string, authorize func(
 	}()
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.Serve(listener) }()
-	authorize("http://" + listener.Addr().String() + "/callback")
+	if err := authorize("http://" + listener.Addr().String() + "/callback"); err != nil {
+		return "", fmt.Errorf("open Google authorization in browser: %w", err)
+	}
 	select {
 	case callback := <-results:
 		return callback.code, callback.err

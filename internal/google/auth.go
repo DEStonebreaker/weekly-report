@@ -20,7 +20,7 @@ import (
 func LoadOAuthConfig(credentialsPath string) (*oauth2.Config, error) {
 	credentials, err := os.ReadFile(credentialsPath)
 	if err != nil {
-		return nil, fmt.Errorf("read client secret file: %w", err)
+		return nil, fmt.Errorf("read Google OAuth credentials at %s: %w", credentialsPath, err)
 	}
 
 	config, err := google.ConfigFromJSON(
@@ -28,7 +28,7 @@ func LoadOAuthConfig(credentialsPath string) (*oauth2.Config, error) {
 		tasksapi.TasksReadonlyScope,
 		gmailapi.GmailSendScope)
 	if err != nil {
-		return nil, fmt.Errorf("parse client secret file: %w", err)
+		return nil, fmt.Errorf("parse Google OAuth credentials at %s: %w", credentialsPath, err)
 	}
 
 	return config, nil
@@ -128,22 +128,38 @@ func saveTokenFile(path string, token *oauth2.Token) error {
 }
 
 func AuthorizeWithGoogle(ctx context.Context, config *oauth2.Config) (*oauth2.Token, error) {
+	return authorizeWithGoogle(ctx, config, func(authURL string) error {
+		fmt.Println("Open this URL in your browser and approve access:")
+		fmt.Println(authURL)
+		fmt.Println("Waiting for authorization (up to five minutes)...")
+		return nil
+	})
+}
+
+// AuthorizeWithGoogleBrowser runs the same PKCE loopback flow as the CLI and
+// opens the authorization URL in the user's system browser.
+func AuthorizeWithGoogleBrowser(ctx context.Context, config *oauth2.Config, openBrowser func(string) error) (*oauth2.Token, error) {
+	if openBrowser == nil {
+		return nil, fmt.Errorf("browser opener is required")
+	}
+	return authorizeWithGoogle(ctx, config, openBrowser)
+}
+
+func authorizeWithGoogle(ctx context.Context, config *oauth2.Config, openBrowser func(string) error) (*oauth2.Token, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	verifier := oauth2.GenerateVerifier()
 	state := oauth2.GenerateVerifier()
 	authConfig := *config
-	code, err := receiveAuthorizationCode(ctx, state, func(redirectURL string) {
+	code, err := receiveAuthorizationCode(ctx, state, func(redirectURL string) error {
 		authConfig.RedirectURL = redirectURL
 		authURL := authConfig.AuthCodeURL(
 			state,
 			oauth2.AccessTypeOffline,
 			oauth2.ApprovalForce,
 			oauth2.S256ChallengeOption(verifier))
-		fmt.Println("Open this URL in your browser and approve access:")
-		fmt.Println(authURL)
-		fmt.Println("Waiting for authorization (up to five minutes)...")
+		return openBrowser(authURL)
 	})
 	if err != nil {
 		return nil, err

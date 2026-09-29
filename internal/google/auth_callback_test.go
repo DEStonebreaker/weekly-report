@@ -21,7 +21,7 @@ func TestReceiveAuthorizationCode(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			var callbackURL string
-			code, err := receiveAuthorizationCode(ctx, "expected", func(redirect string) {
+			code, err := receiveAuthorizationCode(ctx, "expected", func(redirect string) error {
 				callbackURL = redirect
 				for _, request := range []struct {
 					method, query string
@@ -60,6 +60,7 @@ func TestReceiveAuthorizationCode(t *testing.T) {
 						t.Fatalf("callback response: %s, %v", body, err)
 					}
 				}
+				return nil
 			})
 			if denied {
 				if err == nil || !strings.Contains(err.Error(), "access_denied") {
@@ -91,11 +92,12 @@ func TestReceiveAuthorizationCodeCancellation(t *testing.T) {
 			}
 			defer cancel()
 			var callbackURL string
-			_, err := receiveAuthorizationCode(ctx, "expected", func(redirect string) {
+			_, err := receiveAuthorizationCode(ctx, "expected", func(redirect string) error {
 				callbackURL = redirect
 				if !timeout {
 					cancel()
 				}
+				return nil
 			})
 			if !errors.Is(err, want) {
 				t.Fatalf("error = %v, want %v", err, want)
