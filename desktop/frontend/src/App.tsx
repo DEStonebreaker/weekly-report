@@ -10,6 +10,9 @@ type Progress = {preparationId: string; completed: number; total: number; result
 type Delivery = {recipient: {name: string; address: string}; status: string; messageId?: string; error?: string};
 type ScheduledRun = {time: string; status: string; results?: Delivery[]; error?: string};
 type SchedulerStatus = {active: boolean; error?: string};
+type SectionId = 'connect-google' | 'report-settings' | 'preview-send';
+
+const sectionIds: SectionId[] = ['connect-google', 'report-settings', 'preview-send'];
 
 function emptySettings(): Settings {
   const today = new Date();
@@ -38,11 +41,13 @@ export default function App() {
   const [results, setResults] = useState<Delivery[]>([]);
   const [schedulerActive, setSchedulerActive] = useState(false);
   const [scheduledRun, setScheduledRun] = useState<ScheduledRun | null>(null);
+  const [activeSection, setActiveSection] = useState<SectionId>('connect-google');
   const revision = useRef(0);
   const preparationRef = useRef('');
   const activeSendRef = useRef('');
 
   async function refreshSetup() {
+    if (!('go' in window)) return;
     try {
       const state = await GetSetupData();
       setSettings({...state.settings, recipients: state.settings.recipients ?? []});
@@ -148,6 +153,33 @@ export default function App() {
   useEffect(() => { void refreshSetup(); }, []);
 
   useEffect(() => {
+    let frame = 0;
+    const updateActiveSection = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4) {
+          setActiveSection(sectionIds[sectionIds.length - 1]);
+          return;
+        }
+        const current = sectionIds.reduce<SectionId>((active, id) => {
+          const section = document.getElementById(id);
+          return section && section.getBoundingClientRect().top <= 180 ? id : active;
+        }, sectionIds[0]);
+        setActiveSection(current);
+      });
+    };
+    updateActiveSection();
+    window.addEventListener('scroll', updateActiveSection, {passive: true});
+    window.addEventListener('resize', updateActiveSection);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', updateActiveSection);
+      window.removeEventListener('resize', updateActiveSection);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!('runtime' in window)) return;
     EventsOn('delivery-progress', (event: Progress) => {
       if (event.preparationId === preparationRef.current || event.preparationId === activeSendRef.current) {
         setProgress(event);
@@ -189,26 +221,47 @@ export default function App() {
     if (which === 'from') setCustomFrom(value); else setCustomTo(value);
   }
 
+  const sendComplete = busy !== 'send' && results.length > 0 && results.length === preview?.messages.length && results.every(result => result.status === 'SENT');
+  const steps: {id: SectionId; number: string; title: string; state: string; complete: boolean}[] = [
+    {id: 'connect-google', number: '01', title: 'Connect Google', state: connected ? 'Connected' : 'Not connected', complete: connected},
+    {id: 'report-settings', number: '02', title: 'Report settings', state: settingsSaved ? 'Saved' : 'Not saved', complete: settingsSaved},
+    {id: 'preview-send', number: '03', title: 'Preview and send', state: busy === 'send' ? 'Sending' : sendComplete ? 'Sent' : preparationId ? 'Ready to review' : results.length ? 'Review results' : 'Not started', complete: sendComplete},
+  ];
+
   return (
-    <main>
-      <header><span className="mark" aria-hidden="true">W</span>Weekly Report<span className="badge">Setup</span></header>
+    <main className="app-shell">
+      <aside className="sidebar" aria-label="Report workflow">
+        <div className="brand"><strong>Weekly Report</strong></div>
+        <nav className="workflow-nav" aria-label="Setup steps">
+          <p className="nav-heading">On this page</p>
+          <ol>
+            {steps.map(step => <li key={step.id}>
+              <a href={`#${step.id}`} className={`nav-link ${activeSection === step.id ? 'active' : ''}`} aria-current={activeSection === step.id ? 'location' : undefined} onClick={() => setActiveSection(step.id)}>
+                <span className="nav-number">{step.number}</span>
+                <span className="nav-copy"><strong>{step.title}</strong><small className={step.complete ? 'complete' : ''}>{step.complete ? '✓ ' : ''}{step.state}</small></span>
+              </a>
+            </li>)}
+          </ol>
+        </nav>
+        <p className="sidebar-footnote">Your Google connection and report settings stay on this computer.</p>
+      </aside>
+      <div className="content">
       <section className="intro" aria-labelledby="welcome">
-        <p className="eyebrow">One simple setup, then you're ready</p>
-        <h1 id="welcome">Connect your tasks.<br/>Set up your report.</h1>
+        <h1 id="welcome">Set up your report</h1>
         <p className="lede">Sign in with Google, choose a task list, and tell Weekly Report who should receive each personalized email.</p>
       </section>
 
       {error && <div className="notice error" role="alert"><strong>Something needs attention</strong><span>{error}</span></div>}
       {notice && <div className="notice" role="status">{notice}</div>}
 
-      <section className="panel setup-panel" aria-labelledby="google-heading">
+      <section id="connect-google" className="panel setup-panel" aria-labelledby="google-heading">
         <div className="section-heading"><div><p className="step">STEP 1</p><h2 id="google-heading">Connect Google</h2></div><span className={`status ${connected ? '' : 'pending'}`} role="status">{connected ? 'Connected' : 'Not connected'}</span></div>
         <p>Weekly Report uses Google Tasks to prepare reports and Gmail to send them. Sign-in happens in your system browser.</p>
         {!connected && <div className="credential-help">Google OAuth credentials are not bundled yet. Add your Google Desktop app credentials file at:<code>{credentialsPath || 'Loading…'}</code></div>}
         <div className="actions"><button onClick={() => void connect()} disabled={!!busy}>{busy === 'connect' ? 'Waiting for Google…' : connected ? 'Reconnect Google' : 'Connect Google'}</button><button className="secondary" onClick={() => void loadLists()} disabled={!connected || !!busy}>{busy === 'lists' ? 'Loading lists…' : 'Load task lists'}</button></div>
       </section>
 
-      <section className="panel settings-panel" aria-labelledby="settings-heading">
+      <section id="report-settings" className="panel settings-panel" aria-labelledby="settings-heading">
         <div className="section-heading"><div><p className="step">STEP 2</p><h2 id="settings-heading">Report settings</h2></div><span className={`status ${settingsSaved ? '' : 'pending'}`}>{settingsSaved ? 'Saved' : 'Unsaved'}</span></div>
         <div className="fields">
           <label className="field">Google task list
@@ -229,7 +282,7 @@ export default function App() {
           <div className="schedule-setting">
             <div className="schedule-choice"><div><strong>Automatic delivery</strong><span>Send the active scheduled report while Weekly Report is closed and you are logged into this Mac.</span></div><label className="toggle-label"><input type="checkbox" checked={settings.scheduleEnabled} onChange={e => update('scheduleEnabled', e.target.checked)} /><span>Enable</span></label></div>
             <label className="field schedule-time">Run each day at<input type="time" value={settings.scheduleTime} disabled={!settings.scheduleEnabled || busy === 'save'} onChange={e => update('scheduleTime', e.target.value)} /><span className="hint">Local time on this Mac</span></label>
-            <p className="schedule-policy">If your Mac sleeps through the time, launchd runs the job when it wakes. If it was powered off, the next daily run is at the next scheduled time. Opening the app after the scheduled time also catches up, but only while a report window is active. A failed or uncertain recipient attempt is never retried automatically.</p>
+            <details className="schedule-details"><summary>How automatic delivery works</summary><p>If your Mac sleeps through the time, launchd runs the job when it wakes. If it was powered off, the next daily run is at the next scheduled time. Opening the app after the scheduled time also catches up, but only while a report window is active. A failed or uncertain recipient attempt is never retried automatically.</p></details>
             <div className="schedule-state"><span className={`status ${settings.scheduleEnabled && schedulerActive ? '' : 'pending'}`}>{settings.scheduleEnabled ? schedulerActive ? 'Background schedule active' : 'Background schedule not active' : 'Automatic delivery off'}</span>{settings.scheduleEnabled && !schedulerActive && <span className="hint">Save settings in the installed Weekly Report app to activate launchd.</span>}</div>
           </div>
         </div>
@@ -244,8 +297,8 @@ export default function App() {
         <div className="save-row"><span>{settingsSaved ? 'Your saved settings will be used next time you open the app.' : 'Changes are saved only on this computer.'}</span><button onClick={() => void save()} disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save settings'}</button></div>
       </section>
 
-      <section className="panel report-panel" aria-labelledby="report-heading">
-        <div className="section-heading"><div><p className="step">STEP 3</p><h2 id="report-heading">Preview and send</h2></div><span className={`status ${preparationId ? '' : 'pending'}`}>{busy === 'send' ? 'Sending' : preparationId ? 'Ready to review' : results.length ? 'Send attempted' : 'No preview'}</span></div>
+      <section id="preview-send" className="panel report-panel" aria-labelledby="report-heading">
+        <div className="section-heading"><div><p className="step">STEP 3</p><h2 id="report-heading">Preview and send</h2></div><span className={`status ${preparationId || sendComplete ? '' : 'pending'}`}>{busy === 'send' ? 'Sending' : sendComplete ? 'Sent' : preparationId ? 'Ready to review' : results.length ? 'Send attempted' : 'No preview'}</span></div>
         <p>Choose dates, prepare personalized emails, and review each one before sending.</p>
         <div className="range-controls">
           <label className="field">Report dates<select value={rangePreset} onChange={e => updateRangePreset(e.target.value)}>
@@ -265,7 +318,7 @@ export default function App() {
       </section>
 
       {scheduledRun && <section className="panel scheduled-result" aria-labelledby="scheduled-result-heading"><div className="section-heading"><h2 id="scheduled-result-heading">Latest automatic run</h2><span className={`status ${scheduledRun.status === 'complete' ? '' : 'pending'}`}>{scheduledRun.status}</span></div><p>{new Date(scheduledRun.time).toLocaleString()}</p>{scheduledRun.error && <p className="schedule-error">{scheduledRun.error}</p>}{scheduledRun.results?.map((result, index) => <div className={`result-row ${result.status.toLowerCase()}`} key={`${result.recipient.address}-${index}`}><div className="result-icon" aria-hidden="true">{result.status === 'SENT' ? '✓' : result.status === 'UNCERTAIN' ? '?' : '!'}</div><div><strong>{result.recipient.name} · {result.recipient.address}</strong><span>{result.status}{result.error ? ` — ${result.error}` : ''}</span></div><span className="result-status">{result.status}</span></div>)}</section>}
-      <p className="privacy">Your Google connection and report settings stay on this computer.</p>
+      </div>
     </main>
   );
 }
