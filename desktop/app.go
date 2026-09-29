@@ -212,11 +212,23 @@ func (a *App) PrepareReport(settings app.Config, preset, from, to string, revisi
 	})
 }
 
-// PrepareForceSend previews the current saved schedule window through the
+// PrepareForceSend previews the selected dates with saved settings through the
 // manual delivery path, leaving scheduled recipient attempts untouched.
-func (a *App) PrepareForceSend(revision uint64) (PreparedPreview, error) {
+func (a *App) PrepareForceSend(preset, from, to string, revision uint64) (PreparedPreview, error) {
+	return a.prepareForceSendAt(preset, from, to, revision, time.Now())
+}
+
+func (a *App) prepareForceSendAt(preset, from, to string, revision uint64, now time.Time) (PreparedPreview, error) {
+	options, err := manualRange(preset, from, to)
+	if err != nil {
+		return PreparedPreview{}, err
+	}
 	return a.prepareReport(revision, func() (*app.PreparedReport, error) {
-		return a.service.PrepareCurrentScheduledWindow(a.ctx, time.Now())
+		settings, err := a.service.LoadSettings()
+		if err != nil {
+			return nil, fmt.Errorf("could not load saved settings: %w", err)
+		}
+		return a.service.PrepareReport(a.ctx, settings, options, now)
 	})
 }
 

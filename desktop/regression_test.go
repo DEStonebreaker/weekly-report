@@ -144,8 +144,13 @@ func TestScheduledWakeBeforeTodaysTriggerSendsOnce(t *testing.T) {
 	}
 }
 
-func TestForceSendUsesCurrentWindowWithoutChangingScheduledAttempts(t *testing.T) {
-	service, _ := desktopServiceFixture(t)
+func TestForceSendUsesSelectedDatesWithoutChangingScheduledAttempts(t *testing.T) {
+	service, config := desktopServiceFixture(t)
+	config.StartDate = "2026-09-19"
+	config.EndDate = "2026-10-05"
+	if err := service.SaveSettings(config); err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Dir(service.CredentialsPath())
 	sends := 0
 	client := &http.Client{Transport: desktopTransport(func(r *http.Request) (*http.Response, error) {
@@ -154,7 +159,10 @@ func TestForceSendUsesCurrentWindowWithoutChangingScheduledAttempts(t *testing.T
 		case "/tasks/v1/users/@me/lists":
 			body = `{"items":[{"id":"list","title":"Work"}]}`
 		case "/tasks/v1/lists/list/tasks":
-			body = `{"items":[{"id":"task","title":"Work","due":"2026-09-22T00:00:00Z"}]}`
+			due := "2026-09-26T00:00:00Z"
+			if r.URL.Query().Get("dueMin") <= due && due < r.URL.Query().Get("dueMax") {
+				body = `{"items":[{"id":"task","title":"Boundary task","due":"2026-09-26T00:00:00Z"}]}`
+			}
 		case "/gmail/v1/users/me/messages/send":
 			sends++
 			body = `{"id":"sent"}`
@@ -173,16 +181,28 @@ func TestForceSendUsesCurrentWindowWithoutChangingScheduledAttempts(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	a := &App{ctx: ctx, service: service}
+	options, err := manualRange("thisWeek", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ {
-		prepared, err := service.PrepareCurrentScheduledWindow(ctx, now)
+		force, err := a.prepareForceSendAt("thisWeek", "", "", uint64(i), now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		preview := prepared.Preview()
-		if preview.StartDate != "2026-09-21" || preview.EndDate != "2026-09-27" || len(preview.Messages) != 1 {
-			t.Fatalf("force preview = %+v", preview)
+		preview := force.Preview
+		if preview.StartDate != "2026-09-21" || preview.EndDate != "2026-09-27" || len(preview.Messages) != 1 || !strings.Contains(preview.Messages[0].HTML, "Boundary task") {
+			t.Fatalf("force preview did not use this week: %+v", preview)
 		}
-		results, err := service.SendPreparedReport(ctx, prepared)
+		normal, err := service.PrepareReport(ctx, config, options, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if preview.Messages[0].HTML != normal.Preview().Messages[0].HTML {
+			t.Fatal("force preview body differs from normal preview for the same selected dates")
+		}
+		results, err := service.SendPreparedReport(ctx, a.prepared)
 		if err != nil || len(results) != 1 || results[0].Status != "SENT" {
 			t.Fatalf("force send %d: results=%+v, error=%v", i+1, results, err)
 		}
@@ -196,8 +216,5 @@ func TestForceSendUsesCurrentWindowWithoutChangingScheduledAttempts(t *testing.T
 	}
 	if _, err := service.SendScheduledReport(ctx, now); err != nil || sends != 3 {
 		t.Fatalf("scheduled repeat after force send: sends=%d, error=%v", sends, err)
-	}
-	if _, err := service.PrepareCurrentScheduledWindow(ctx, now.AddDate(0, 0, 7)); err == nil {
-		t.Fatal("force send prepared a window outside saved schedule dates")
 	}
 }

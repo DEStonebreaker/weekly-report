@@ -16,7 +16,7 @@ export function InvalidateReportPreparation(arg1:number):Promise<void>;
 
 export function ListTaskLists():Promise<Array<google.TaskList>>;
 
-export function PrepareForceSend(arg1:number):Promise<main.PreparedPreview>;
+export function PrepareForceSend(arg1:string,arg2:string,arg3:string,arg4:number):Promise<main.PreparedPreview>;
 
 export function PrepareReport(arg1:app.Config,arg2:string,arg3:string,arg4:string,arg5:number):Promise<main.PreparedPreview>;
 
