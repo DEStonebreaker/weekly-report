@@ -124,6 +124,27 @@ func (s *Service) PrepareReport(ctx context.Context, config Config, options repo
 	return prepared, nil
 }
 
+// PrepareCurrentScheduledWindow uses saved settings and the window containing
+// today. It is a manual preparation: it never reads or writes delivery state,
+// even when the same window has already been attempted by the scheduler.
+func (s *Service) PrepareCurrentScheduledWindow(ctx context.Context, now time.Time) (*PreparedReport, error) {
+	config, err := s.LoadSettings()
+	if err != nil {
+		return nil, err
+	}
+	window, err := activeWindow(config, now)
+	if err != nil {
+		return nil, err
+	}
+	if window.Start.IsZero() {
+		return nil, fmt.Errorf("today is outside the saved schedule dates")
+	}
+	return s.PrepareReport(ctx, config, report.RangeOptions{
+		From: window.Start.Format("2006-01-02"),
+		To:   window.End.Format("2006-01-02"),
+	}, now)
+}
+
 // SendPreparedReport sends the exact prepared messages, without re-reading settings
 // or Tasks. A snapshot is consumed when this operation starts, even if authorization
 // fails. Cancellation before starting does not consume it. Never retry an uncertain

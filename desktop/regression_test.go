@@ -143,3 +143,61 @@ func TestScheduledWakeBeforeTodaysTriggerSendsOnce(t *testing.T) {
 		t.Fatalf("disabled delivery status=%+v, sends=%d, error=%v", status, sends, err)
 	}
 }
+
+func TestForceSendUsesCurrentWindowWithoutChangingScheduledAttempts(t *testing.T) {
+	service, _ := desktopServiceFixture(t)
+	dir := filepath.Dir(service.CredentialsPath())
+	sends := 0
+	client := &http.Client{Transport: desktopTransport(func(r *http.Request) (*http.Response, error) {
+		body := "{}"
+		switch r.URL.Path {
+		case "/tasks/v1/users/@me/lists":
+			body = `{"items":[{"id":"list","title":"Work"}]}`
+		case "/tasks/v1/lists/list/tasks":
+			body = `{"items":[{"id":"task","title":"Work","due":"2026-09-22T00:00:00Z"}]}`
+		case "/gmail/v1/users/me/messages/send":
+			sends++
+			body = `{"id":"sent"}`
+		default:
+			t.Errorf("unexpected request: %s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.Local)
+	if _, err := service.SendScheduledReport(ctx, now); err != nil || sends != 1 {
+		t.Fatalf("initial scheduled send: sends=%d, error=%v", sends, err)
+	}
+	statePath := filepath.Join(dir, "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		prepared, err := service.PrepareCurrentScheduledWindow(ctx, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		preview := prepared.Preview()
+		if preview.StartDate != "2026-09-21" || preview.EndDate != "2026-09-27" || len(preview.Messages) != 1 {
+			t.Fatalf("force preview = %+v", preview)
+		}
+		results, err := service.SendPreparedReport(ctx, prepared)
+		if err != nil || len(results) != 1 || results[0].Status != "SENT" {
+			t.Fatalf("force send %d: results=%+v, error=%v", i+1, results, err)
+		}
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("force send changed scheduled delivery state")
+	}
+	if _, err := service.SendScheduledReport(ctx, now); err != nil || sends != 3 {
+		t.Fatalf("scheduled repeat after force send: sends=%d, error=%v", sends, err)
+	}
+	if _, err := service.PrepareCurrentScheduledWindow(ctx, now.AddDate(0, 0, 7)); err == nil {
+		t.Fatal("force send prepared a window outside saved schedule dates")
+	}
+}

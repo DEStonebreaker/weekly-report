@@ -203,12 +203,26 @@ func (a *App) InvalidateReportPreparation(revision uint64) {
 }
 
 func (a *App) PrepareReport(settings app.Config, preset, from, to string, revision uint64) (PreparedPreview, error) {
-	if a.ctx == nil {
-		return PreparedPreview{}, fmt.Errorf("desktop application is still starting; try again")
-	}
 	options, err := manualRange(preset, from, to)
 	if err != nil {
 		return PreparedPreview{}, err
+	}
+	return a.prepareReport(revision, func() (*app.PreparedReport, error) {
+		return a.service.PrepareReport(a.ctx, settings, options, time.Now())
+	})
+}
+
+// PrepareForceSend previews the current saved schedule window through the
+// manual delivery path, leaving scheduled recipient attempts untouched.
+func (a *App) PrepareForceSend(revision uint64) (PreparedPreview, error) {
+	return a.prepareReport(revision, func() (*app.PreparedReport, error) {
+		return a.service.PrepareCurrentScheduledWindow(a.ctx, time.Now())
+	})
+}
+
+func (a *App) prepareReport(revision uint64, build func() (*app.PreparedReport, error)) (PreparedPreview, error) {
+	if a.ctx == nil {
+		return PreparedPreview{}, fmt.Errorf("desktop application is still starting; try again")
 	}
 	a.mu.Lock()
 	if a.sending || a.connecting {
@@ -228,7 +242,7 @@ func (a *App) PrepareReport(settings app.Config, preset, from, to string, revisi
 	a.preparedID = ""
 	a.mu.Unlock()
 
-	prepared, err := a.service.PrepareReport(a.ctx, settings, options, time.Now())
+	prepared, err := build()
 	if err != nil {
 		return PreparedPreview{}, fmt.Errorf("could not prepare report: %s", desktopGoogleError(err))
 	}
