@@ -143,3 +143,78 @@ func TestScheduledWakeBeforeTodaysTriggerSendsOnce(t *testing.T) {
 		t.Fatalf("disabled delivery status=%+v, sends=%d, error=%v", status, sends, err)
 	}
 }
+
+func TestForceSendUsesSelectedDatesWithoutChangingScheduledAttempts(t *testing.T) {
+	service, config := desktopServiceFixture(t)
+	config.StartDate = "2026-09-19"
+	config.EndDate = "2026-10-05"
+	if err := service.SaveSettings(config); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(service.CredentialsPath())
+	sends := 0
+	client := &http.Client{Transport: desktopTransport(func(r *http.Request) (*http.Response, error) {
+		body := "{}"
+		switch r.URL.Path {
+		case "/tasks/v1/users/@me/lists":
+			body = `{"items":[{"id":"list","title":"Work"}]}`
+		case "/tasks/v1/lists/list/tasks":
+			due := "2026-09-26T00:00:00Z"
+			if r.URL.Query().Get("dueMin") <= due && due < r.URL.Query().Get("dueMax") {
+				body = `{"items":[{"id":"task","title":"Boundary task","due":"2026-09-26T00:00:00Z"}]}`
+			}
+		case "/gmail/v1/users/me/messages/send":
+			sends++
+			body = `{"id":"sent"}`
+		default:
+			t.Errorf("unexpected request: %s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.Local)
+	if _, err := service.SendScheduledReport(ctx, now); err != nil || sends != 1 {
+		t.Fatalf("initial scheduled send: sends=%d, error=%v", sends, err)
+	}
+	statePath := filepath.Join(dir, "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &App{ctx: ctx, service: service}
+	options, err := manualRange("thisWeek", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		force, err := a.prepareForceSendAt("thisWeek", "", "", uint64(i), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		preview := force.Preview
+		if preview.StartDate != "2026-09-21" || preview.EndDate != "2026-09-27" || len(preview.Messages) != 1 || !strings.Contains(preview.Messages[0].HTML, "Boundary task") {
+			t.Fatalf("force preview did not use this week: %+v", preview)
+		}
+		normal, err := service.PrepareReport(ctx, config, options, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if preview.Messages[0].HTML != normal.Preview().Messages[0].HTML {
+			t.Fatal("force preview body differs from normal preview for the same selected dates")
+		}
+		results, err := service.SendPreparedReport(ctx, a.prepared)
+		if err != nil || len(results) != 1 || results[0].Status != "SENT" {
+			t.Fatalf("force send %d: results=%+v, error=%v", i+1, results, err)
+		}
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("force send changed scheduled delivery state")
+	}
+	if _, err := service.SendScheduledReport(ctx, now); err != nil || sends != 3 {
+		t.Fatalf("scheduled repeat after force send: sends=%d, error=%v", sends, err)
+	}
+}

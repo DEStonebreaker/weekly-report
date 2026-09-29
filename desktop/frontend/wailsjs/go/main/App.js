@@ -26,6 +26,10 @@ export function ListTaskLists() {
   return window['go']['main']['App']['ListTaskLists']();
 }
 
+export function PrepareForceSend(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['PrepareForceSend'](arg1, arg2, arg3, arg4);
+}
+
 export function PrepareReport(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['PrepareReport'](arg1, arg2, arg3, arg4, arg5);
 }
