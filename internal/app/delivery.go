@@ -3,11 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	gmailapi "google.golang.org/api/gmail/v1"
 	tasksapi "google.golang.org/api/tasks/v1"
@@ -29,48 +28,29 @@ type sendResult struct {
 	err       error
 }
 
-// sendReport uses state only for scheduled delivery. Manual sends pass nil and
-// neither consult nor change scheduled attempts.
-func sendReport(ctx context.Context, config Config, window report.ReportWindow, state *DeliveryState, lists []google.TaskList, tasksService *tasksapi.Service, client *http.Client, output io.Writer) error {
-	listID, err := selectTaskList(lists, config.TaskListID)
-	if err != nil {
-		return err
-	}
-	pending := make([]Recipient, 0, len(config.Recipients))
+// deliverReport uses state only for scheduled delivery. All messages are prepared
+// before any send, and existing attempts are returned in configuration order.
+func deliverReport(ctx context.Context, config Config, window report.ReportWindow, state *DeliveryState, lists []google.TaskList, tasksService *tasksapi.Service, client *http.Client) ([]sendResult, error) {
+	pending := config
+	pending.Recipients = nil
 	results, _ := existingResults(config, window, state)
 	for i, recipient := range config.Recipients {
 		if results[i].status == "" {
-			pending = append(pending, recipient)
+			pending.Recipients = append(pending.Recipients, recipient)
 		}
 	}
-	if len(pending) == 0 {
-		printSendResults(output, results)
-		return resultError(results)
+	if len(pending.Recipients) == 0 {
+		return results, resultError(results)
 	}
-	dueMin := window.Start
-	dueMax := window.End.AddDate(0, 0, 1).Add(-time.Second)
-	tasks, err := google.GetTasks(ctx, tasksService, listID, google.GetTasksOptions{DueMin: &dueMin, DueMax: &dueMax})
+	prepared, err := prepareReport(ctx, pending, window, lists, tasksService)
 	if err != nil {
-		return fmt.Errorf("get tasks: %w", google.WithAuthHint(err))
-	}
-	tasks = report.SortByDueDate(tasks)
-	prepared := make([]preparedEmail, 0, len(pending))
-	for _, recipient := range pending {
-		body, err := report.RenderReport(recipient.Name, tasks, window)
-		if err != nil {
-			return fmt.Errorf("render report for %s: %w", recipient.Address, err)
-		}
-		raw, err := google.BuildRawMessage(google.OutgoingEmail{From: config.Sender, To: recipient.Address, Subject: config.Subject, HTMLBody: body}, time.Now())
-		if err != nil {
-			return fmt.Errorf("prepare report for %s: %w", recipient.Address, err)
-		}
-		prepared = append(prepared, preparedEmail{recipient, deliveryKey(window, listID, recipient.Address), raw})
+		return nil, err
 	}
 	gmailService, err := google.CreateGmailService(ctx, client)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	sent := sendPrepared(ctx, gmailService, prepared, state)
+	sent := sendPrepared(ctx, gmailService, prepared.messages, state)
 	for i, recipient := range config.Recipients {
 		for _, result := range sent {
 			if recipient.Address == result.recipient.Address {
@@ -79,11 +59,10 @@ func sendReport(ctx context.Context, config Config, window report.ReportWindow, 
 			}
 		}
 	}
-	printSendResults(output, results)
 	if err := ctx.Err(); err != nil {
-		return err
+		return results, err
 	}
-	return resultError(results)
+	return results, resultError(results)
 }
 
 func existingResults(config Config, window report.ReportWindow, state *DeliveryState) ([]sendResult, bool) {
@@ -124,9 +103,20 @@ func resultError(results []sendResult) error {
 }
 
 func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []preparedEmail, state *DeliveryState) []sendResult {
+	return sendPreparedWithProgress(ctx, service, prepared, state, nil)
+}
+
+func sendPreparedWithProgress(ctx context.Context, service *gmailapi.Service, prepared []preparedEmail, state *DeliveryState, progress func(int, sendResult)) []sendResult {
 	results := make([]sendResult, len(prepared))
 	slots := make(chan struct{}, 4)
 	var group sync.WaitGroup
+	var completed atomic.Int32
+	finish := func(index int, result sendResult) {
+		results[index] = result
+		if progress != nil {
+			progress(int(completed.Add(1)), result)
+		}
+	}
 	for index, message := range prepared {
 		group.Add(1)
 		go func(index int, message preparedEmail) {
@@ -138,20 +128,20 @@ func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []pre
 			case <-ctx.Done():
 				result.status = "SKIPPED"
 				result.err = ctx.Err()
-				results[index] = result
+				finish(index, result)
 				return
 			}
 			if err := ctx.Err(); err != nil {
 				result.status = "SKIPPED"
 				result.err = err
-				results[index] = result
+				finish(index, result)
 				return
 			}
 			if state != nil {
 				if err := state.beginAttempt(message.key, false); err != nil {
 					result.status = "FAILED"
 					result.err = fmt.Errorf("record send attempt: %w", err)
-					results[index] = result
+					finish(index, result)
 					return
 				}
 			}
@@ -179,34 +169,9 @@ func sendPrepared(ctx context.Context, service *gmailapi.Service, prepared []pre
 			} else {
 				result.messageID = id
 			}
-			results[index] = result
+			finish(index, result)
 		}(index, message)
 	}
 	group.Wait()
 	return results
-}
-
-func printSendResults(output io.Writer, results []sendResult) {
-	sent, failed, uncertain, skipped := 0, 0, 0, 0
-	for _, result := range results {
-		switch result.status {
-		case "SENT":
-			sent++
-			fmt.Fprintf(output, "SENT\t%s\tmessage ID %s\n", result.recipient.Address, result.messageID)
-		case "FAILED":
-			failed++
-			fmt.Fprintf(output, "FAILED\t%s\t%v\n", result.recipient.Address, result.err)
-		case "UNCERTAIN":
-			uncertain++
-			fmt.Fprintf(output, "UNCERTAIN\t%s\t%v\n", result.recipient.Address, result.err)
-		default:
-			skipped++
-			if result.err != nil {
-				fmt.Fprintf(output, "SKIPPED\t%s\t%v\n", result.recipient.Address, result.err)
-			} else {
-				fmt.Fprintf(output, "SKIPPED\t%s\tpreviously attempted\n", result.recipient.Address)
-			}
-		}
-	}
-	fmt.Fprintf(output, "%d sent, %d failed, %d uncertain, %d skipped\n", sent, failed, uncertain, skipped)
 }

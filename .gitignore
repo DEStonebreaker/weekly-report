@@ -11,4 +11,15 @@ state.json
 
 aidocs/*
 !aidocs/implementation-plan.md
+!aidocs/desktop-milestones.md
 .idea/
+
+# Wails desktop build output and frontend dependencies
+/desktop/desktop
+/desktop/build/bin/
+/desktop/frontend/node_modules/
+/desktop/frontend/dist/*
+!/desktop/frontend/dist/.gitkeep
+/desktop/frontend/wailsjs/runtime/
+/desktop/frontend/*.tsbuildinfo
+/desktop/frontend/package.json.md5

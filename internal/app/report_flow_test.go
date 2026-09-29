@@ -34,7 +34,7 @@ func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
 			if got := query.Get("dueMin"); got != "2026-09-19T00:00:00Z" {
 				t.Errorf("dueMin=%s", got)
 			}
-			if got := query.Get("dueMax"); got != "2026-09-25T23:59:59Z" {
+			if got := query.Get("dueMax"); got != "2026-09-26T00:00:00Z" {
 				t.Errorf("dueMax=%s", got)
 			}
 			return jsonResponse(200, `{"items":[{"id":"one","title":"Task","due":"2026-09-20T00:00:00Z"}]}`), nil
@@ -74,7 +74,8 @@ func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
 	defer state.Close()
 	lists := []google.TaskList{{ID: "list-id", Title: "Work"}}
 	var output bytes.Buffer
-	err = sendReport(context.Background(), config, window, state, lists, tasksService, client, &output)
+	results, err := deliverReport(context.Background(), config, window, state, lists, tasksService, client)
+	printSendResults(&output, deliveryResults(results))
 	if err == nil {
 		t.Fatal("partial failure did not return error")
 	}
@@ -85,7 +86,8 @@ func TestReportFlowPartialFailureAndRepeat(t *testing.T) {
 		t.Errorf("calls: tasks=%d send=%d", taskCalls.Load(), sendCalls.Load())
 	}
 	output.Reset()
-	err = sendReport(context.Background(), config, window, state, lists, tasksService, client, &output)
+	results, err = deliverReport(context.Background(), config, window, state, lists, tasksService, client)
+	printSendResults(&output, deliveryResults(results))
 	if err == nil {
 		t.Fatal("prior failure was not reported")
 	}
@@ -117,7 +119,7 @@ func TestReportPreparationFailureDoesNotSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	err = sendReport(context.Background(), config, window, state, []google.TaskList{{ID: "list-id"}}, tasksService, client, &bytes.Buffer{})
+	_, err = deliverReport(context.Background(), config, window, state, []google.TaskList{{ID: "list-id"}}, tasksService, client)
 	if err == nil || !strings.Contains(err.Error(), "prepare report") {
 		t.Errorf("error=%v", err)
 	}
@@ -147,7 +149,7 @@ func TestReportTasksUnauthorizedSuggestsInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	err = sendReport(context.Background(), config, window, state, []google.TaskList{{ID: "list-id"}}, service, client, &bytes.Buffer{})
+	_, err = deliverReport(context.Background(), config, window, state, []google.TaskList{{ID: "list-id"}}, service, client)
 	if err == nil || !strings.Contains(err.Error(), "weekly-report --init") {
 		t.Errorf("error=%v, want --init guidance", err)
 	}

@@ -140,7 +140,7 @@ func TestTransportFailureStaysUncertainAndIsNotRetried(t *testing.T) {
 		t.Errorf("Gmail calls=%d, want 1", calls)
 	}
 	var output bytes.Buffer
-	printSendResults(&output, repeated)
+	printSendResults(&output, deliveryResults(repeated))
 	if !strings.Contains(output.String(), "UNCERTAIN") || !strings.Contains(output.String(), "1 uncertain") {
 		t.Errorf("output=%s", output.String())
 	}

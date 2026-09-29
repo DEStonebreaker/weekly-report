@@ -1,9 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"fmt"
 	"net/mail"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -11,13 +15,15 @@ import (
 )
 
 type Config struct {
-	Sender     string      `toml:"sender"`
-	Subject    string      `toml:"subject"`
-	TaskListID string      `toml:"task_list_id"`
-	StartDate  string      `toml:"start_date"`
-	EndDate    string      `toml:"end_date"`
-	WindowDays int         `toml:"window_days"`
-	Recipients []Recipient `toml:"recipients"`
+	Sender          string      `toml:"sender" json:"sender"`
+	Subject         string      `toml:"subject" json:"subject"`
+	TaskListID      string      `toml:"task_list_id" json:"taskListId"`
+	StartDate       string      `toml:"start_date" json:"startDate"`
+	EndDate         string      `toml:"end_date" json:"endDate"`
+	WindowDays      int         `toml:"window_days" json:"windowDays"`
+	ScheduleEnabled bool        `toml:"schedule_enabled" json:"scheduleEnabled"`
+	ScheduleTime    string      `toml:"schedule_time" json:"scheduleTime"`
+	Recipients      []Recipient `toml:"recipients" json:"recipients"`
 }
 
 func loadConfig(path string) (Config, error) {
@@ -35,9 +41,56 @@ func loadConfig(path string) (Config, error) {
 	return config, nil
 }
 
+// LoadSettingsDraft reads an existing form configuration without requiring it to
+// be complete, so desktop onboarding can edit settings before the first save.
+func loadConfigDraft(path string) (Config, error) {
+	var config Config
+	metadata, err := toml.DecodeFile(path, &config)
+	if err != nil {
+		return Config{}, fmt.Errorf("read configuration %s: %w", path, err)
+	}
+	if keys := metadata.Undecoded(); len(keys) != 0 {
+		return Config{}, fmt.Errorf("unknown configuration key %s", keys[0])
+	}
+	return config, nil
+}
+
 type Recipient struct {
-	Name    string `toml:"name"`
-	Address string `toml:"address"`
+	Name    string `toml:"name" json:"name"`
+	Address string `toml:"address" json:"address"`
+}
+
+// saveConfig validates before touching disk and atomically replaces the TOML file.
+func saveConfig(path string, config Config) error {
+	if err := config.Validate(); err != nil {
+		return fmt.Errorf("validate configuration: %w", err)
+	}
+	var data bytes.Buffer
+	if err := toml.NewEncoder(&data).Encode(config); err != nil {
+		return fmt.Errorf("encode configuration: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("create configuration directory: %w", err)
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".config-*")
+	if err != nil {
+		return fmt.Errorf("create temporary configuration: %w", err)
+	}
+	defer os.Remove(temp.Name())
+	defer temp.Close()
+	if _, err := temp.Write(data.Bytes()); err != nil {
+		return fmt.Errorf("write configuration: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		return fmt.Errorf("sync configuration: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close configuration: %w", err)
+	}
+	if err := os.Rename(temp.Name(), path); err != nil {
+		return fmt.Errorf("replace configuration: %w", err)
+	}
+	return nil
 }
 
 func (config Config) Validate() error {
@@ -66,6 +119,15 @@ func (config Config) Validate() error {
 	}
 	if config.WindowDays < 1 {
 		return fmt.Errorf("window days must be at least 1")
+	}
+	if config.ScheduleEnabled && config.ScheduleTime == "" {
+		return fmt.Errorf("schedule time is required when automatic delivery is enabled")
+	}
+	if config.ScheduleTime != "" {
+		parsed, err := time.Parse("15:04", config.ScheduleTime)
+		if err != nil || parsed.Format("15:04") != config.ScheduleTime {
+			return fmt.Errorf("schedule time must use 24-hour HH:MM format")
+		}
 	}
 	if len(config.Recipients) == 0 {
 		return fmt.Errorf("at least one recipient is required")
