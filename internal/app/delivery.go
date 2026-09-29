@@ -31,6 +31,11 @@ type sendResult struct {
 // deliverReport uses state only for scheduled delivery. All messages are prepared
 // before any send, and existing attempts are returned in configuration order.
 func deliverReport(ctx context.Context, config Config, window report.ReportWindow, state *DeliveryState, lists []google.TaskList, tasksService *tasksapi.Service, client *http.Client) ([]sendResult, error) {
+	results, _, _, err := deliverReportDetailed(ctx, config, window, state, lists, tasksService, client)
+	return results, err
+}
+
+func deliverReportDetailed(ctx context.Context, config Config, window report.ReportWindow, state *DeliveryState, lists []google.TaskList, tasksService *tasksapi.Service, client *http.Client) ([]sendResult, int, bool, error) {
 	pending := config
 	pending.Recipients = nil
 	results, _ := existingResults(config, window, state)
@@ -40,15 +45,24 @@ func deliverReport(ctx context.Context, config Config, window report.ReportWindo
 		}
 	}
 	if len(pending.Recipients) == 0 {
-		return results, resultError(results)
+		return results, 0, false, resultError(results)
 	}
-	prepared, err := prepareReport(ctx, pending, window, lists, tasksService)
+	prepared, err := prepareReportWithFilter(ctx, pending, window, lists, tasksService, true)
 	if err != nil {
-		return nil, err
+		return nil, 0, false, err
+	}
+	if prepared.taskCount == 0 {
+		prior := make([]sendResult, 0, len(results))
+		for _, result := range results {
+			if result.status != "" {
+				prior = append(prior, result)
+			}
+		}
+		return prior, 0, true, resultError(prior)
 	}
 	gmailService, err := google.CreateGmailService(ctx, client)
 	if err != nil {
-		return nil, err
+		return nil, prepared.taskCount, false, err
 	}
 	sent := sendPrepared(ctx, gmailService, prepared.messages, state)
 	for i, recipient := range config.Recipients {
@@ -60,9 +74,9 @@ func deliverReport(ctx context.Context, config Config, window report.ReportWindo
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return results, err
+		return results, prepared.taskCount, false, err
 	}
-	return results, resultError(results)
+	return results, prepared.taskCount, false, resultError(results)
 }
 
 func existingResults(config Config, window report.ReportWindow, state *DeliveryState) ([]sendResult, bool) {

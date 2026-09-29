@@ -26,7 +26,7 @@ func runScheduledRunner() int {
 	defer stop()
 	ctx, cancel := context.WithTimeout(base, 15*time.Minute)
 	defer cancel()
-	status, err := runScheduledDelivery(ctx, service, time.Now())
+	status, err := runScheduledDeliveryFrom(ctx, service, time.Now(), "launchd")
 	if status != nil {
 		printScheduledResults(status.Results)
 	}
@@ -57,7 +57,7 @@ func (a *App) resumeScheduledDelivery(ctx context.Context) {
 	if !active {
 		active, err = applySystemSchedule(settings)
 		if err != nil {
-			status := &ScheduledRunStatus{Time: time.Now().Format(time.RFC3339), Status: "schedule-error", Error: err.Error()}
+			status := &ScheduledRunStatus{Time: time.Now().Format(time.RFC3339), Status: "schedule-error", Source: "gui-catch-up", Error: err.Error()}
 			_ = saveScheduledRun(status)
 			wailsruntime.EventsEmit(ctx, "schedule-status", SchedulerStatusEvent{Active: false, Error: err.Error()})
 			wailsruntime.EventsEmit(ctx, "scheduled-run-complete", status)
@@ -73,14 +73,19 @@ func (a *App) resumeScheduledDelivery(ctx context.Context) {
 		return
 	case <-time.After(750 * time.Millisecond): // Let the setup screen subscribe to the result event.
 	}
-	status, _ := runScheduledDelivery(ctx, a.service, time.Now())
+	status, _ := runScheduledDeliveryFrom(ctx, a.service, time.Now(), "gui-catch-up")
 	if status != nil {
 		wailsruntime.EventsEmit(ctx, "scheduled-run-complete", status)
 	}
 }
 
 func runScheduledDelivery(ctx context.Context, service *app.Service, now time.Time) (*ScheduledRunStatus, error) {
+	return runScheduledDeliveryFrom(ctx, service, now, "unknown")
+}
+
+func runScheduledDeliveryFrom(ctx context.Context, service *app.Service, now time.Time, source string) (*ScheduledRunStatus, error) {
 	status, err := scheduledDelivery(ctx, service, now)
+	status.Source = source
 	if status.Status != "disabled" {
 		if saveErr := saveScheduledRun(status); saveErr != nil && err == nil {
 			err = fmt.Errorf("save scheduled run status: %w", saveErr)
@@ -104,11 +109,27 @@ func scheduledDelivery(ctx context.Context, service *app.Service, now time.Time)
 		status.Status = "disabled"
 		return status, nil
 	}
-	status.Results, err = service.SendScheduledReport(ctx, now)
+	outcome, err := service.SendScheduledReportDetailed(ctx, now)
+	status.Results = outcome.Results
+	if outcome.TasksQueried {
+		status.TaskCount = &outcome.TaskCount
+	}
+	if !outcome.Window.Start.IsZero() {
+		status.StartDate = outcome.Window.Start.Format("2006-01-02")
+		status.EndDate = outcome.Window.End.Format("2006-01-02")
+	}
 	if err != nil {
 		status.Status, status.Error = "error", err.Error()
+	} else if outcome.NoTasks {
+		status.Status = "no-tasks"
 	} else if len(status.Results) > 0 {
-		status.Status = "complete"
+		status.Status = "already-sent"
+		for _, result := range status.Results {
+			if result.Status != "SKIPPED" {
+				status.Status = "complete"
+				break
+			}
+		}
 	}
 	return status, err
 }

@@ -57,9 +57,47 @@ func TestLaunchAgentMatchesRequestedTimeAndAppPath(t *testing.T) {
 	}
 }
 
+func packagedTestExecutable(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "Weekly Report.app", "Contents", "MacOS", "Weekly Report")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("test executable"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLaunchAgentReadyRequiresExecutable(t *testing.T) {
+	executable := packagedTestExecutable(t)
+	logPath := filepath.Join(t.TempDir(), "scheduled.log")
+	installed := renderLaunchAgent(executable, logPath, 9, 0)
+	if !launchAgentReady(installed, executable, logPath, 9, 0) {
+		t.Fatal("loaded matching schedule with executable considered inactive")
+	}
+	if err := os.Remove(executable); err != nil {
+		t.Fatal(err)
+	}
+	if launchAgentReady(installed, executable, logPath, 9, 0) {
+		t.Fatal("loaded schedule with missing executable considered active")
+	}
+}
+
+func TestLaunchAgentReadyRejectsNonExecutableFile(t *testing.T) {
+	executable := packagedTestExecutable(t)
+	if err := os.Chmod(executable, 0600); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "scheduled.log")
+	if launchAgentReady(renderLaunchAgent(executable, logPath, 9, 0), executable, logPath, 9, 0) {
+		t.Fatal("loaded schedule with non-executable file considered active")
+	}
+}
+
 func TestSyncLaunchAgentInstallsAndRemoves(t *testing.T) {
 	home := t.TempDir()
-	executablePath := "/Applications/Weekly Report.app/Contents/MacOS/Weekly Report"
+	executablePath := packagedTestExecutable(t)
 	var commands [][]string
 	run := func(args ...string) ([]byte, error) {
 		commands = append(commands, append([]string(nil), args...))
@@ -102,6 +140,25 @@ func TestSyncLaunchAgentRejectsDevelopmentBinary(t *testing.T) {
 	}
 }
 
+func TestSyncLaunchAgentRejectsMissingPackagedExecutable(t *testing.T) {
+	path := packagedTestExecutable(t)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	called := false
+	_, err := syncLaunchAgent(home, app.Config{ScheduleEnabled: true, ScheduleTime: "09:30"}, func() (string, error) { return path, nil }, func(...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "app executable is unavailable") || called {
+		t.Fatalf("error=%v launchctl called=%v", err, called)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")); !os.IsNotExist(statErr) {
+		t.Fatalf("schedule was written for a missing executable: %v", statErr)
+	}
+}
+
 func TestSyncLaunchAgentRestoresOldFileIfActivationFails(t *testing.T) {
 	home := t.TempDir()
 	launchAgents := filepath.Join(home, "Library", "LaunchAgents")
@@ -124,7 +181,8 @@ func TestSyncLaunchAgentRestoresOldFileIfActivationFails(t *testing.T) {
 		}
 		return nil, nil
 	}
-	_, err := syncLaunchAgent(home, app.Config{ScheduleEnabled: true, ScheduleTime: "10:00"}, func() (string, error) { return "/Applications/Weekly Report.app/Contents/MacOS/Weekly Report", nil }, run)
+	executablePath := packagedTestExecutable(t)
+	_, err := syncLaunchAgent(home, app.Config{ScheduleEnabled: true, ScheduleTime: "10:00"}, func() (string, error) { return executablePath, nil }, run)
 	if err == nil || !strings.Contains(err.Error(), "activate macOS background schedule") {
 		t.Fatalf("install error = %v", err)
 	}

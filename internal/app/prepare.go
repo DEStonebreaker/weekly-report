@@ -40,6 +40,7 @@ type PreparedReport struct {
 	owner     *Service
 	preview   ReportPreview
 	messages  []preparedEmail
+	taskCount int
 	attempted *atomic.Bool
 }
 
@@ -52,6 +53,10 @@ func (p *PreparedReport) Preview() ReportPreview {
 
 // prepareReport only reads Tasks and builds messages; it has no Gmail or state access.
 func prepareReport(ctx context.Context, config Config, window report.ReportWindow, lists []google.TaskList, tasksService *tasksapi.Service) (*PreparedReport, error) {
+	return prepareReportWithFilter(ctx, config, window, lists, tasksService, false)
+}
+
+func prepareReportWithFilter(ctx context.Context, config Config, window report.ReportWindow, lists []google.TaskList, tasksService *tasksapi.Service, scheduled bool) (*PreparedReport, error) {
 	listID, err := selectTaskList(lists, config.TaskListID)
 	if err != nil {
 		return nil, err
@@ -64,8 +69,28 @@ func prepareReport(ctx context.Context, config Config, window report.ReportWindo
 	if err != nil {
 		return nil, fmt.Errorf("get tasks: %w", google.WithAuthHint(err))
 	}
+	if scheduled {
+		eligible := make([]report.Task, 0, len(tasks))
+		start, end := window.Start.Format("2006-01-02"), window.End.Format("2006-01-02")
+		for _, task := range tasks {
+			if task.DueDate == nil {
+				continue
+			}
+			day := task.DueDate.Format("2006-01-02")
+			if day >= start && day <= end {
+				eligible = append(eligible, task)
+			}
+		}
+		tasks = eligible
+	}
 	tasks = report.SortByDueDate(tasks)
-	prepared := &PreparedReport{attempted: &atomic.Bool{}, preview: ReportPreview{
+	eligible := 0
+	for _, task := range tasks {
+		if task.DueDate != nil {
+			eligible++
+		}
+	}
+	prepared := &PreparedReport{attempted: &atomic.Bool{}, taskCount: eligible, preview: ReportPreview{
 		Sender: config.Sender, Subject: config.Subject, TaskListID: listID,
 		StartDate: window.Start.Format("2006-01-02"), EndDate: window.End.Format("2006-01-02"),
 		Messages: make([]MessagePreview, 0, len(config.Recipients)),

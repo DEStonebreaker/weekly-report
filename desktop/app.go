@@ -75,10 +75,14 @@ type SendOutcome struct {
 }
 
 type ScheduledRunStatus struct {
-	Time    string               `json:"time"`
-	Status  string               `json:"status"`
-	Results []app.DeliveryResult `json:"results,omitempty"`
-	Error   string               `json:"error,omitempty"`
+	Time      string               `json:"time"`
+	Status    string               `json:"status"`
+	Source    string               `json:"source,omitempty"`
+	StartDate string               `json:"startDate,omitempty"`
+	EndDate   string               `json:"endDate,omitempty"`
+	TaskCount *int                 `json:"taskCount,omitempty"`
+	Results   []app.DeliveryResult `json:"results,omitempty"`
+	Error     string               `json:"error,omitempty"`
 }
 
 func NewApp() (*App, error) {
