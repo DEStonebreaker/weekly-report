@@ -44,7 +44,7 @@ export default function App() {
   const [taskLists, setTaskLists] = useState<TaskList[]>([]);
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
-  const [toast, setToast] = useState('');
+  const [toast, setToast] = useState<{message: string; kind: 'success' | 'info'} | null>(null);
   const [error, setError] = useState('');
   const [rangePreset, setRangePreset] = useState('next7');
   const [customFrom, setCustomFrom] = useState('');
@@ -64,8 +64,8 @@ export default function App() {
   const preparationRef = useRef('');
   const activeSendRef = useRef('');
 
-  function showToast(message: string) {
-    setToast(message);
+  function showToast(message: string, kind: 'success' | 'info' = 'success') {
+    setToast({message, kind});
   }
 
   function navigate(section: SectionId | 'activity') {
@@ -81,7 +81,7 @@ export default function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(''), 4800);
+    const timer = window.setTimeout(() => setToast(null), 4800);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -325,7 +325,10 @@ export default function App() {
             </li>)}
           </ol>
         </nav>
-        <p className="sidebar-footnote">Your Google connection and report settings stay on this computer.</p>
+        <div className="sidebar-bottom">
+          <a className="sidebar-tutorial" href="#tutorial" onClick={event => { event.preventDefault(); showToast('Tutorial coming soon.', 'info'); }}>Tutorial</a>
+          <p className="sidebar-footnote">Your Google connection and report settings stay on this computer.</p>
+        </div>
       </aside>
       <div className="content">
       {error && <div className="notice error global-message" role="alert"><strong>Something needs attention</strong><span>{error}</span></div>}
@@ -414,7 +417,7 @@ export default function App() {
       </section>
       </>}
       </div>
-      {toast && <div className="toast" role="status" aria-live="polite"><span className="toast-icon" aria-hidden="true">✓</span><span>{toast}</span></div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><span className="toast-icon" aria-hidden="true">{toast.kind === 'success' ? '✓' : 'i'}</span><span>{toast.message}</span></div>}
     </main>
   );
 }
