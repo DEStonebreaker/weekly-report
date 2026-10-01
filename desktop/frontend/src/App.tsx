@@ -60,6 +60,7 @@ export default function App() {
   const [scheduledRun, setScheduledRun] = useState<ScheduledRun | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>('connect-google');
   const [view, setView] = useState<View>('setup');
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const revision = useRef(0);
   const preparationRef = useRef('');
   const activeSendRef = useRef('');
@@ -311,23 +312,34 @@ export default function App() {
   ];
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${sidebarExpanded ? '' : 'sidebar-collapsed'}`}>
       <aside className="sidebar" aria-label="Report workflow">
-        <div className="brand"><strong>Weekly Report</strong></div>
-        <nav className="workflow-nav" aria-label="Report navigation">
-          <p className="nav-heading">Workspace</p>
-          <ol>
-            {steps.map(step => <li key={step.id}>
-              <button type="button" className={`nav-link ${view === 'activity' ? step.id === 'activity' ? 'active' : '' : activeSection === step.id ? 'active' : ''}`} aria-current={view === 'activity' ? step.id === 'activity' ? 'page' : undefined : activeSection === step.id ? 'location' : undefined} onClick={() => navigate(step.id)}>
-                <span className="nav-copy"><strong>{step.title}</strong></span>
-                {step.complete && <span className="nav-check" role="img" aria-label={`${step.title} complete`}>✓</span>}
-              </button>
-            </li>)}
-          </ol>
-        </nav>
-        <div className="sidebar-bottom">
-          <a className="sidebar-tutorial" href="#tutorial" onClick={event => { event.preventDefault(); showToast('Tutorial coming soon.', 'info'); }}>Tutorial</a>
-          <p className="sidebar-footnote">Your Google connection and report settings stay on this computer.</p>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          aria-label={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+          aria-expanded={sidebarExpanded}
+          aria-controls="sidebar-navigation"
+          onClick={() => setSidebarExpanded(expanded => !expanded)}
+        >
+          <span aria-hidden="true">{sidebarExpanded ? '‹' : '›'}</span>
+        </button>
+        <div id="sidebar-navigation" className="sidebar-inner" aria-hidden={!sidebarExpanded} inert={!sidebarExpanded}>
+          <div className="brand"><strong>Weekly Report</strong></div>
+          <nav className="workflow-nav" aria-label="Report navigation">
+            <ol>
+              {steps.map(step => <li key={step.id}>
+                <button type="button" className={`nav-link ${view === 'activity' ? step.id === 'activity' ? 'active' : '' : activeSection === step.id ? 'active' : ''}`} aria-current={view === 'activity' ? step.id === 'activity' ? 'page' : undefined : activeSection === step.id ? 'location' : undefined} onClick={() => navigate(step.id)}>
+                  <span className="nav-copy"><strong>{step.title}</strong></span>
+                  {step.complete && <span className="nav-check" role="img" aria-label={`${step.title} complete`}>✓</span>}
+                </button>
+              </li>)}
+            </ol>
+          </nav>
+          <div className="sidebar-bottom">
+            <a className="sidebar-tutorial" href="#tutorial" onClick={event => { event.preventDefault(); showToast('Tutorial coming soon.', 'info'); }}>Tutorial</a>
+            <p className="sidebar-footnote">Your Google connection and report settings stay on this computer.</p>
+          </div>
         </div>
       </aside>
       <div className="content">
@@ -340,10 +352,10 @@ export default function App() {
       </section>
 
       <section id="connect-google" className="panel setup-panel" aria-labelledby="google-heading">
-        <div className="section-heading"><div><p className="step">Google account</p><h2 id="google-heading">Connect Google</h2></div></div>
+        <div className="section-heading"><div><p className="step" role="status">Google Account: {connected ? <span className="inline-check"><span aria-hidden="true">✓</span> Connected</span> : 'Not connected'}</p><h2 id="google-heading">Connect Google</h2></div></div>
         <p>Weekly Report uses Google Tasks to prepare reports and Gmail to send them. Sign-in happens in your system browser.</p>
         {!connected && <div className="credential-help">Google OAuth credentials are not bundled yet. Add your Google Desktop app credentials file at:<code>{credentialsPath || 'Loading…'}</code></div>}
-        <div className="actions"><div className="action-with-check"><button onClick={() => void connect()} disabled={!!busy}>{busy === 'connect' ? 'Waiting for Google…' : connected ? 'Reconnect Google' : 'Connect Google'}</button>{connected && <span className="inline-check" role="status"><span aria-hidden="true">✓</span> Google connected</span>}</div><div className="action-with-check"><button className="secondary" onClick={() => void loadLists()} disabled={!connected || !!busy}>{busy === 'lists' ? 'Loading lists…' : 'Load task lists'}</button>{taskLists.length > 0 && <span className="inline-check" role="status"><span aria-hidden="true">✓</span> Lists ready</span>}</div></div>
+        <div className="actions"><button onClick={() => void connect()} disabled={!!busy}>{busy === 'connect' ? 'Waiting for Google…' : connected ? 'Reconnect Google' : 'Connect Google'}</button><div className="action-with-check"><button className="secondary" onClick={() => void loadLists()} disabled={!connected || !!busy}>{busy === 'lists' ? 'Loading lists…' : 'Load task lists'}</button>{taskLists.length > 0 && <span className="inline-check" role="status"><span aria-hidden="true">✓</span> Lists ready</span>}</div></div>
       </section>
 
       <section id="report-settings" className="panel settings-panel" aria-labelledby="settings-heading">
