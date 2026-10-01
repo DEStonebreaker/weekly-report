@@ -128,12 +128,17 @@ func (a *App) GetSetupData() (SetupData, error) {
 }
 
 func (a *App) ConnectGoogle() error {
-	return a.connectGoogle(func(ctx context.Context, config *oauth2.Config) (*oauth2.Token, error) {
+	err := a.connectGoogle(func(ctx context.Context, config *oauth2.Config) (*oauth2.Token, error) {
 		return google.AuthorizeWithGoogleBrowser(ctx, config, func(url string) error {
 			wailsruntime.BrowserOpenURL(a.ctx, url)
 			return nil
 		})
 	})
+	if a.ctx != nil && a.ctx.Err() == nil {
+		wailsruntime.WindowUnminimise(a.ctx)
+		wailsruntime.WindowShow(a.ctx)
+	}
+	return err
 }
 
 func (a *App) connectGoogle(authorize func(context.Context, *oauth2.Config) (*oauth2.Token, error)) error {

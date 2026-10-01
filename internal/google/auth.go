@@ -133,7 +133,7 @@ func AuthorizeWithGoogle(ctx context.Context, config *oauth2.Config) (*oauth2.To
 		fmt.Println(authURL)
 		fmt.Println("Waiting for authorization (up to five minutes)...")
 		return nil
-	})
+	}, "return to the terminal")
 }
 
 // AuthorizeWithGoogleBrowser runs the same PKCE loopback flow as the CLI and
@@ -142,10 +142,10 @@ func AuthorizeWithGoogleBrowser(ctx context.Context, config *oauth2.Config, open
 	if openBrowser == nil {
 		return nil, fmt.Errorf("browser opener is required")
 	}
-	return authorizeWithGoogle(ctx, config, openBrowser)
+	return authorizeWithGoogle(ctx, config, openBrowser, "close this tab and return to Weekly Report")
 }
 
-func authorizeWithGoogle(ctx context.Context, config *oauth2.Config, openBrowser func(string) error) (*oauth2.Token, error) {
+func authorizeWithGoogle(ctx context.Context, config *oauth2.Config, openBrowser func(string) error, returnInstruction string) (*oauth2.Token, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -160,7 +160,7 @@ func authorizeWithGoogle(ctx context.Context, config *oauth2.Config, openBrowser
 			oauth2.ApprovalForce,
 			oauth2.S256ChallengeOption(verifier))
 		return openBrowser(authURL)
-	})
+	}, returnInstruction)
 	if err != nil {
 		return nil, err
 	}

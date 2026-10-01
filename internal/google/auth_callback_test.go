@@ -61,7 +61,7 @@ func TestReceiveAuthorizationCode(t *testing.T) {
 					}
 				}
 				return nil
-			})
+			}, "return to the terminal")
 			if denied {
 				if err == nil || !strings.Contains(err.Error(), "access_denied") {
 					t.Fatalf("error = %v", err)
@@ -98,7 +98,7 @@ func TestReceiveAuthorizationCodeCancellation(t *testing.T) {
 					cancel()
 				}
 				return nil
-			})
+			}, "return to the terminal")
 			if !errors.Is(err, want) {
 				t.Fatalf("error = %v, want %v", err, want)
 			}
