@@ -9,8 +9,10 @@ type Preview = {sender: string; subject: string; taskListId: string; startDate: 
 type Progress = {preparationId: string; completed: number; total: number; result?: {recipient: {name: string; address: string}; status: string; error?: string}};
 type Delivery = {recipient: {name: string; address: string}; status: string; messageId?: string; error?: string};
 type ScheduledRun = {time: string; status: string; source?: string; startDate?: string; endDate?: string; taskCount?: number; results?: Delivery[]; error?: string};
+type ManualOutcome = {time: string; results: Delivery[]; complete: boolean};
 type SchedulerStatus = {active: boolean; error?: string};
 type SectionId = 'connect-google' | 'report-settings' | 'preview-send';
+type View = 'setup' | 'activity';
 type PreviewMode = 'manual' | 'force';
 
 const sectionIds: SectionId[] = ['connect-google', 'report-settings', 'preview-send'];
@@ -42,6 +44,7 @@ export default function App() {
   const [taskLists, setTaskLists] = useState<TaskList[]>([]);
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
+  const [toast, setToast] = useState<{message: string; kind: 'success' | 'info'} | null>(null);
   const [error, setError] = useState('');
   const [rangePreset, setRangePreset] = useState('next7');
   const [customFrom, setCustomFrom] = useState('');
@@ -52,12 +55,35 @@ export default function App() {
   const [selectedRecipient, setSelectedRecipient] = useState(0);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [results, setResults] = useState<Delivery[]>([]);
+  const [latestManualOutcome, setLatestManualOutcome] = useState<ManualOutcome | null>(null);
   const [schedulerActive, setSchedulerActive] = useState(false);
   const [scheduledRun, setScheduledRun] = useState<ScheduledRun | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>('connect-google');
+  const [view, setView] = useState<View>('setup');
   const revision = useRef(0);
   const preparationRef = useRef('');
   const activeSendRef = useRef('');
+
+  function showToast(message: string, kind: 'success' | 'info' = 'success') {
+    setToast({message, kind});
+  }
+
+  function navigate(section: SectionId | 'activity') {
+    if (section === 'activity') {
+      setView('activity');
+      window.scrollTo({top: 0, behavior: 'smooth'});
+      return;
+    }
+    setView('setup');
+    setActiveSection(section);
+    requestAnimationFrame(() => document.getElementById(section)?.scrollIntoView({behavior: 'smooth', block: 'start'}));
+  }
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 4800);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   async function refreshSetup() {
     if (!('go' in window)) return;
@@ -75,21 +101,26 @@ export default function App() {
 
   async function loadLists() {
     setBusy('lists'); setError(''); setNotice('');
+    setTaskLists([]);
     try {
       const result = await ListTaskLists();
-      setTaskLists(result ?? []);
-      setNotice(result.length ? 'Task lists loaded. Choose the list for your reports.' : 'No task lists were found in this Google account.');
+      const lists = result ?? [];
+      setTaskLists(lists);
+      if (lists.length) showToast('Task lists loaded. Choose the list for your reports.');
+      else setNotice('No task lists were found in this Google account.');
     } catch (e) { setError(String(e)); }
     finally { setBusy(''); }
   }
 
   async function connect() {
     invalidatePreview();
+    setTaskLists([]);
     setBusy('connect'); setError(''); setNotice('A Google sign-in page will open in your browser. Use the same Google account to renew your connection, then prepare a new preview.');
     try {
       await ConnectGoogle();
       setConnected(true);
-      setNotice('Google is connected. Load your task lists to continue.');
+      setNotice('');
+      showToast('Google connected. Load your task lists to continue.');
       await loadLists();
     } catch (e) { setError(String(e)); }
     finally { setBusy(''); }
@@ -105,9 +136,10 @@ export default function App() {
         setError(outcome.scheduleError);
         setNotice('Settings were saved, but automatic delivery could not be activated. Save again to retry.');
       } else if (settings.scheduleEnabled) {
-        setNotice(outcome.schedulerActive ? `Settings saved. Automatic delivery is active every day at ${settings.scheduleTime}.` : 'Settings saved. Automatic delivery is not active.');
+        if (outcome.schedulerActive) showToast(`Settings saved. Automatic delivery is active every day at ${settings.scheduleTime}.`);
+        else setNotice('Settings saved. Automatic delivery is not active.');
       } else {
-        setNotice('Settings saved on this computer.');
+        showToast('Settings saved on this computer.');
       }
     } catch (e) { setError(String(e)); }
     finally { setBusy(''); }
@@ -140,7 +172,7 @@ export default function App() {
       }
       preparationRef.current = result.id;
       setPreparationId(result.id); setPreview(result.preview); setSelectedRecipient(0);
-      setNotice('Review each personalized report below. Sending uses these exact prepared messages.');
+      showToast('Preview ready. Review each personalized report before sending.');
     } catch (e) { setError(String(e)); }
     finally { setBusy(''); }
   }
@@ -157,7 +189,7 @@ export default function App() {
       }
       preparationRef.current = result.id;
       setPreparationId(result.id); setPreview(result.preview); setSelectedRecipient(0);
-      setNotice('Review each message for the selected report dates. Force sending does not change automatic delivery records.');
+      showToast('Force send preview ready. Review each message before sending.');
     } catch (e) { setError(String(e)); }
     finally { setBusy(''); }
   }
@@ -172,17 +204,26 @@ export default function App() {
     try {
       const outcome = await SendPreparedReport(id);
       activeSendRef.current = '';
-      setResults(outcome.results ?? []);
+      const deliveryResults = outcome.results ?? [];
+      const complete = !outcome.error && deliveryResults.length > 0 && deliveryResults.length === preview?.messages.length && deliveryResults.every((result: Delivery) => result.status === 'SENT');
+      setResults(deliveryResults);
+      setLatestManualOutcome({time: new Date().toISOString(), results: deliveryResults, complete});
       if (outcome.error) {
         setError(outcome.error);
-        setNotice((outcome.results ?? []).length && outcome.results.every((result: Delivery) => result.status === 'SKIPPED')
+        setNotice(deliveryResults.length && deliveryResults.every((result: Delivery) => result.status === 'SKIPPED')
           ? 'No messages were sent. Reconnect Google if requested, then prepare a new preview.'
           : 'Review each recipient result. A new send requires a new preview.');
       }
-      else setNotice(forceSend ? 'Reports sent. Automatic delivery records were not changed.' : 'All recipient reports were sent.');
-      if (outcome.results?.some((result: Delivery) => result.status === 'UNCERTAIN')) {
+      else if (complete) {
+        setNotice('');
+        showToast(forceSend ? 'Reports sent. Automatic delivery records were not changed.' : 'All recipient reports were sent.');
+      }
+      else setNotice('Review each recipient result. A new send requires a new preview.');
+      if (deliveryResults.some((result: Delivery) => result.status === 'UNCERTAIN')) {
         setNotice('Some delivery outcomes are uncertain. Check Gmail Sent Mail before preparing another send.');
       }
+      setView('activity');
+      window.scrollTo({top: 0, behavior: 'smooth'});
     } catch (e) { setError(String(e)); }
     finally { activeSendRef.current = ''; setBusy(''); setProgress(null); }
   }
@@ -190,6 +231,7 @@ export default function App() {
   useEffect(() => { void refreshSetup(); }, []);
 
   useEffect(() => {
+    if (view !== 'setup') return;
     let frame = 0;
     const updateActiveSection = () => {
       cancelAnimationFrame(frame);
@@ -213,7 +255,7 @@ export default function App() {
       window.removeEventListener('scroll', updateActiveSection);
       window.removeEventListener('resize', updateActiveSection);
     };
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     if (!('runtime' in window)) return;
@@ -230,9 +272,9 @@ export default function App() {
     EventsOn('scheduled-run-complete', (event: ScheduledRun) => {
       setScheduledRun(event);
       if (event.status === 'error' || event.status === 'schedule-error') setError(event.error ?? 'Scheduled delivery failed.');
-      else if (event.status === 'complete') setNotice('Automatic delivery ran. See the latest scheduled result below.');
-      else if (event.status === 'already-sent') setNotice('This report window was already sent; no new email was sent.');
-      else if (event.status === 'no-tasks') setNotice('No dated tasks were found for this report window; no email was sent.');
+      else if (event.status === 'complete') showToast('Automatic delivery ran. View the latest result in Delivery activity.');
+      else if (event.status === 'already-sent') setNotice('This report window was already sent; no new email was sent. See Delivery activity for details.');
+      else if (event.status === 'no-tasks') setNotice('No dated tasks were found for this report window; no email was sent. See Delivery activity for details.');
     });
     EventsOn('schedule-status', (event: SchedulerStatus) => {
       setSchedulerActive(event.active);
@@ -261,47 +303,51 @@ export default function App() {
   }
 
   const sendComplete = busy !== 'send' && results.length > 0 && results.length === preview?.messages.length && results.every(result => result.status === 'SENT');
-  const steps: {id: SectionId; number: string; title: string; state: string; complete: boolean}[] = [
-    {id: 'connect-google', number: '01', title: 'Connect Google', state: connected ? 'Connected' : 'Not connected', complete: connected},
-    {id: 'report-settings', number: '02', title: 'Report settings', state: settingsSaved ? 'Saved' : 'Not saved', complete: settingsSaved},
-    {id: 'preview-send', number: '03', title: 'Preview and send', state: busy === 'send' ? 'Sending' : sendComplete ? 'Sent' : preparationId ? 'Ready to review' : results.length ? 'Review results' : 'Not started', complete: sendComplete},
+  const steps: {id: SectionId | 'activity'; title: string; complete: boolean}[] = [
+    {id: 'connect-google', title: 'Connect Google', complete: connected},
+    {id: 'report-settings', title: 'Report settings', complete: settingsSaved},
+    {id: 'preview-send', title: 'Preview and send', complete: sendComplete},
+    {id: 'activity', title: 'Delivery activity', complete: !!scheduledRun && (scheduledRun.status === 'complete' || scheduledRun.status === 'already-sent') || !!latestManualOutcome?.complete},
   ];
 
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Report workflow">
         <div className="brand"><strong>Weekly Report</strong></div>
-        <nav className="workflow-nav" aria-label="Setup steps">
-          <p className="nav-heading">On this page</p>
+        <nav className="workflow-nav" aria-label="Report navigation">
+          <p className="nav-heading">Workspace</p>
           <ol>
             {steps.map(step => <li key={step.id}>
-              <a href={`#${step.id}`} className={`nav-link ${activeSection === step.id ? 'active' : ''}`} aria-current={activeSection === step.id ? 'location' : undefined} onClick={() => setActiveSection(step.id)}>
-                <span className="nav-number">{step.number}</span>
-                <span className="nav-copy"><strong>{step.title}</strong><small className={step.complete ? 'complete' : ''}>{step.complete ? '✓ ' : ''}{step.state}</small></span>
-              </a>
+              <button type="button" className={`nav-link ${view === 'activity' ? step.id === 'activity' ? 'active' : '' : activeSection === step.id ? 'active' : ''}`} aria-current={view === 'activity' ? step.id === 'activity' ? 'page' : undefined : activeSection === step.id ? 'location' : undefined} onClick={() => navigate(step.id)}>
+                <span className="nav-copy"><strong>{step.title}</strong></span>
+                {step.complete && <span className="nav-check" role="img" aria-label={`${step.title} complete`}>✓</span>}
+              </button>
             </li>)}
           </ol>
         </nav>
-        <p className="sidebar-footnote">Your Google connection and report settings stay on this computer.</p>
+        <div className="sidebar-bottom">
+          <a className="sidebar-tutorial" href="#tutorial" onClick={event => { event.preventDefault(); showToast('Tutorial coming soon.', 'info'); }}>Tutorial</a>
+          <p className="sidebar-footnote">Your Google connection and report settings stay on this computer.</p>
+        </div>
       </aside>
       <div className="content">
+      {error && <div className="notice error global-message" role="alert"><strong>Something needs attention</strong><span>{error}</span></div>}
+      {notice && <div className="notice global-message" role="status">{notice}</div>}
+      {view === 'setup' ? <>
       <section className="intro" aria-labelledby="welcome">
         <h1 id="welcome">Set up your report</h1>
         <p className="lede">Sign in with Google, choose a task list, and tell Weekly Report who should receive each personalized email.</p>
       </section>
 
-      {error && <div className="notice error" role="alert"><strong>Something needs attention</strong><span>{error}</span></div>}
-      {notice && <div className="notice" role="status">{notice}</div>}
-
       <section id="connect-google" className="panel setup-panel" aria-labelledby="google-heading">
-        <div className="section-heading"><div><p className="step">STEP 1</p><h2 id="google-heading">Connect Google</h2></div><span className={`status ${connected ? '' : 'pending'}`} role="status">{connected ? 'Connected' : 'Not connected'}</span></div>
+        <div className="section-heading"><div><p className="step">Google account</p><h2 id="google-heading">Connect Google</h2></div></div>
         <p>Weekly Report uses Google Tasks to prepare reports and Gmail to send them. Sign-in happens in your system browser.</p>
         {!connected && <div className="credential-help">Google OAuth credentials are not bundled yet. Add your Google Desktop app credentials file at:<code>{credentialsPath || 'Loading…'}</code></div>}
-        <div className="actions"><button onClick={() => void connect()} disabled={!!busy}>{busy === 'connect' ? 'Waiting for Google…' : connected ? 'Reconnect Google' : 'Connect Google'}</button><button className="secondary" onClick={() => void loadLists()} disabled={!connected || !!busy}>{busy === 'lists' ? 'Loading lists…' : 'Load task lists'}</button></div>
+        <div className="actions"><div className="action-with-check"><button onClick={() => void connect()} disabled={!!busy}>{busy === 'connect' ? 'Waiting for Google…' : connected ? 'Reconnect Google' : 'Connect Google'}</button>{connected && <span className="inline-check" role="status"><span aria-hidden="true">✓</span> Google connected</span>}</div><div className="action-with-check"><button className="secondary" onClick={() => void loadLists()} disabled={!connected || !!busy}>{busy === 'lists' ? 'Loading lists…' : 'Load task lists'}</button>{taskLists.length > 0 && <span className="inline-check" role="status"><span aria-hidden="true">✓</span> Lists ready</span>}</div></div>
       </section>
 
       <section id="report-settings" className="panel settings-panel" aria-labelledby="settings-heading">
-        <div className="section-heading"><div><p className="step">STEP 2</p><h2 id="settings-heading">Report settings</h2></div><span className={`status ${settingsSaved ? '' : 'pending'}`}>{settingsSaved ? 'Saved' : 'Unsaved'}</span></div>
+        <div className="section-heading"><div><p className="step">Your report</p><h2 id="settings-heading">Report settings</h2></div></div>
         <div className="fields">
           <label className="field">Google task list
             <select value={settings.taskListId} onChange={e => update('taskListId', e.target.value)}>
@@ -322,7 +368,7 @@ export default function App() {
             <div className="schedule-choice"><div><strong>Automatic delivery</strong><span>Send the active scheduled report while Weekly Report is closed and you are logged into this Mac.</span></div><label className="toggle-label"><input type="checkbox" checked={settings.scheduleEnabled} onChange={e => update('scheduleEnabled', e.target.checked)} /><span>Enable</span></label></div>
             <label className="field schedule-time">Run each day at<input type="time" value={settings.scheduleTime} disabled={!settings.scheduleEnabled || busy === 'save'} onChange={e => update('scheduleTime', e.target.value)} /><span className="hint">Local time on this Mac</span></label>
             <details className="schedule-details"><summary>How automatic delivery works</summary><p>If your Mac sleeps through the time, launchd runs the job when it wakes. If it was powered off, the next daily run is at the next scheduled time. Opening the app after the scheduled time also catches up, but only while a report window is active. A failed or uncertain recipient attempt is never retried automatically.</p></details>
-            <div className="schedule-state"><span className={`status ${settings.scheduleEnabled && schedulerActive ? '' : 'pending'}`}>{settings.scheduleEnabled ? schedulerActive ? 'Background schedule active' : 'Background schedule not active' : 'Automatic delivery off'}</span>{settings.scheduleEnabled && !schedulerActive && <span className="hint">Save settings in the installed Weekly Report app to activate launchd.</span>}</div>
+            <div className="schedule-state">{settings.scheduleEnabled && schedulerActive ? <span className="inline-check" role="status"><span aria-hidden="true">✓</span> Background schedule active</span> : <span className="hint">{settings.scheduleEnabled ? 'Save settings in the installed Weekly Report app to activate the background schedule.' : 'Automatic delivery is off.'}</span>}</div>
           </div>
         </div>
 
@@ -333,11 +379,11 @@ export default function App() {
           <label className="field">Email address<input type="email" value={recipient.address} onChange={e => updateRecipient(index, 'address', e.target.value)} autoComplete="email" /></label>
           <button className="remove" aria-label={`Remove recipient ${index + 1}`} onClick={() => update('recipients', settings.recipients.filter((_, i) => i !== index))}>Remove</button>
         </div>)}
-        <div className="save-row"><span>{settingsSaved ? 'Your saved settings will be used next time you open the app.' : 'Changes are saved only on this computer.'}</span><button onClick={() => void save()} disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save settings'}</button></div>
+        <div className="save-row"><span>{settingsSaved ? 'Your saved settings will be used next time you open the app.' : 'Changes are saved only on this computer.'}</span><div className="action-with-check"><button onClick={() => void save()} disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save settings'}</button>{settingsSaved && <span className="inline-check" role="status"><span aria-hidden="true">✓</span> Saved</span>}</div></div>
       </section>
 
       <section id="preview-send" className="panel report-panel" aria-labelledby="report-heading">
-        <div className="section-heading"><div><p className="step">STEP 3</p><h2 id="report-heading">Preview and send</h2></div><span className={`status ${preparationId || sendComplete ? '' : 'pending'}`}>{busy === 'send' ? 'Sending' : sendComplete ? 'Sent' : preparationId ? 'Ready to review' : results.length ? 'Send attempted' : 'No preview'}</span></div>
+        <div className="section-heading"><div><p className="step">Delivery</p><h2 id="report-heading">Preview and send</h2></div></div>
         <p>Choose dates, prepare personalized emails, and review each one before sending.</p>
         <div className="range-controls">
           <label className="field">Report dates<select value={rangePreset} onChange={e => updateRangePreset(e.target.value)}>
@@ -354,11 +400,24 @@ export default function App() {
           <div className="send-row"><span>{previewMode === 'force' ? `This sends the reviewed report to all ${preview.messages.length} recipients now. It does not mark the automatic run as complete.` : `This sends the exact message shown above to all ${preview.messages.length} recipients.`}</span><button onClick={() => void send()} disabled={!preparationId || !!busy}>{busy === 'send' ? 'Sending…' : previewMode === 'force' ? 'Force send this report' : 'Send to recipients'}</button></div>
         </div>}
         {busy === 'send' && <div className="progress-track" role="status" aria-live="polite"><span>{progress && progress.total ? `Sending reports: ${progress.completed} of ${progress.total} complete…` : 'Connecting to Gmail…'}</span><div className="progress-bar"><i style={{width: `${progress?.total ? Math.round((progress.completed / progress.total) * 100) : 4}%`}} /></div></div>}
-        {results.length > 0 && <div className="results" aria-labelledby="results-heading"><h3 id="results-heading">Delivery results</h3>{results.map((result, index) => <div className={`result-row ${result.status.toLowerCase()}`} key={`${result.recipient.address}-${index}`}><span className="result-icon" aria-hidden="true">{result.status === 'SENT' ? '✓' : result.status === 'UNCERTAIN' ? '?' : '!'}</span><div><strong>{result.recipient.name} · {result.recipient.address}</strong><span>{result.status === 'SENT' ? 'Sent successfully' : result.status === 'UNCERTAIN' ? 'Delivery is uncertain; check Gmail Sent Mail before retrying' : result.status === 'SKIPPED' ? 'Not sent' : 'Failed to send'}{result.error ? ` — ${result.error}` : ''}</span></div><span className="result-status">{result.status}</span></div>)}</div>}
       </section>
-
-      {scheduledRun && <section className="panel scheduled-result" aria-labelledby="scheduled-result-heading"><div className="section-heading"><h2 id="scheduled-result-heading">Latest automatic run</h2><span className={`status ${scheduledRun.status === 'complete' || scheduledRun.status === 'already-sent' ? '' : 'pending'}`}>{scheduledStatusLabel(scheduledRun.status)}</span></div><p>{new Date(scheduledRun.time).toLocaleString()}{scheduledRun.source ? ` · ${scheduledRun.source === 'launchd' ? 'Background schedule' : scheduledRun.source === 'gui-catch-up' ? 'App catch-up' : scheduledRun.source}` : ''}{scheduledRun.startDate && scheduledRun.endDate ? ` · ${scheduledRun.startDate} through ${scheduledRun.endDate}` : ''}{scheduledRun.taskCount !== undefined ? ` · ${scheduledRun.taskCount} dated task${scheduledRun.taskCount === 1 ? '' : 's'}` : ''}</p>{scheduledRun.error && <p className="schedule-error">{scheduledRun.error}</p>}{scheduledRun.results?.map((result, index) => <div className={`result-row ${result.status.toLowerCase()}`} key={`${result.recipient.address}-${index}`}><div className="result-icon" aria-hidden="true">{result.status === 'SENT' || result.status === 'SKIPPED' && !result.error ? '✓' : result.status === 'UNCERTAIN' ? '?' : '!'}</div><div><strong>{result.recipient.name} · {result.recipient.address}</strong><span>{result.status === 'SKIPPED' && !result.error ? 'Already sent in this report window' : result.status}{result.error ? ` — ${result.error}` : ''}</span></div><span className="result-status">{result.status}</span></div>)}</section>}
+      </> : <>
+      <section className="intro activity-intro" aria-labelledby="activity-heading">
+        <p className="step">Report history</p>
+        <h1 id="activity-heading">Delivery activity</h1>
+        <p className="lede">Review the latest manual send and automatic run in one place.</p>
+      </section>
+      <section className="panel activity-panel" aria-labelledby="manual-results-heading">
+        <div className="section-heading"><div><p className="step">Manual send</p><h2 id="manual-results-heading">Latest send</h2></div>{latestManualOutcome?.complete && <span className="inline-check"><span aria-hidden="true">✓</span> Delivered</span>}</div>
+        {latestManualOutcome ? <><p className="session-note">{new Date(latestManualOutcome.time).toLocaleString()} · Available during this app session</p>{latestManualOutcome.results.length > 0 ? <div className="results">{latestManualOutcome.results.map((result, index) => <div className={`result-row ${result.status.toLowerCase()}`} key={`${result.recipient.address}-${index}`}><span className="result-icon" aria-hidden="true">{result.status === 'SENT' ? '✓' : result.status === 'UNCERTAIN' ? '?' : '!'}</span><div><strong>{result.recipient.name} · {result.recipient.address}</strong><span>{result.status === 'SENT' ? 'Sent successfully' : result.status === 'UNCERTAIN' ? 'Delivery is uncertain; check Gmail Sent Mail before retrying' : result.status === 'SKIPPED' ? 'Not sent' : 'Failed to send'}{result.error ? ` — ${result.error}` : ''}</span></div><span className="result-status">{result.status}</span></div>)}</div> : <p className="activity-empty">No recipient results were returned for this send. Review the message above before trying again.</p>}</> : <p className="activity-empty">No manual delivery results yet. Prepare a preview to send your first report.</p>}
+      </section>
+      <section className="panel activity-panel scheduled-result" aria-labelledby="scheduled-result-heading">
+        <div className="section-heading"><div><p className="step">Automatic delivery</p><h2 id="scheduled-result-heading">Latest automatic run</h2></div></div>
+        {scheduledRun ? <><p className="run-meta"><strong>{scheduledStatusLabel(scheduledRun.status)}</strong><span>{new Date(scheduledRun.time).toLocaleString()}{scheduledRun.source ? ` · ${scheduledRun.source === 'launchd' ? 'Background schedule' : scheduledRun.source === 'gui-catch-up' ? 'App catch-up' : scheduledRun.source}` : ''}</span>{scheduledRun.startDate && scheduledRun.endDate && <span>{scheduledRun.startDate} through {scheduledRun.endDate}</span>}{scheduledRun.taskCount !== undefined && <span>{scheduledRun.taskCount} dated task{scheduledRun.taskCount === 1 ? '' : 's'}</span>}</p>{scheduledRun.error && <p className="schedule-error">{scheduledRun.error}</p>}{scheduledRun.results?.map((result, index) => <div className={`result-row ${result.status.toLowerCase()}`} key={`${result.recipient.address}-${index}`}><span className="result-icon" aria-hidden="true">{result.status === 'SENT' || result.status === 'SKIPPED' && !result.error ? '✓' : result.status === 'UNCERTAIN' ? '?' : '!'}</span><div><strong>{result.recipient.name} · {result.recipient.address}</strong><span>{result.status === 'SKIPPED' && !result.error ? 'Already sent in this report window' : result.status}{result.error ? ` — ${result.error}` : ''}</span></div><span className="result-status">{result.status}</span></div>)}</> : <p className="activity-empty">No automatic runs yet. Once automatic delivery runs, its latest result will appear here.</p>}
+      </section>
+      </>}
       </div>
+      {toast && <div className="toast" role="status" aria-live="polite"><span className="toast-icon" aria-hidden="true">{toast.kind === 'success' ? '✓' : 'i'}</span><span>{toast.message}</span></div>}
     </main>
   );
 }

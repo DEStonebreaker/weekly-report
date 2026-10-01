@@ -10,7 +10,7 @@ import (
 )
 
 // receiveAuthorizationCode starts the listener before publishing its redirect URL.
-func receiveAuthorizationCode(ctx context.Context, state string, authorize func(string) error) (string, error) {
+func receiveAuthorizationCode(ctx context.Context, state string, authorize func(string) error, returnInstruction string) (string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", fmt.Errorf("start OAuth callback listener: %w", err)
@@ -41,7 +41,7 @@ func receiveAuthorizationCode(ctx context.Context, state string, authorize func(
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintln(w, "Authorization callback received. You can return to the terminal.")
+		fmt.Fprintf(w, "Authorization callback received. You can %s.\n", returnInstruction)
 		once.Do(func() { results <- callback })
 	})
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}

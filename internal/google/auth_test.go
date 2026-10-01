@@ -110,3 +110,44 @@ func TestAuthorizeWithGoogle(t *testing.T) {
 	}
 	assertCallbackClosed(t, authQuery.Get("redirect_uri"))
 }
+
+func TestAuthorizeWithGoogleBrowserCallbackMessage(t *testing.T) {
+	exchange := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"access","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer exchange.Close()
+	config := &oauth2.Config{ClientID: "client", Endpoint: oauth2.Endpoint{AuthURL: "https://example.com/auth", TokenURL: exchange.URL, AuthStyle: oauth2.AuthStyleInParams}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var callbackBody string
+	token, err := AuthorizeWithGoogleBrowser(ctx, config, func(authURL string) error {
+		parsed, err := url.Parse(authURL)
+		if err != nil {
+			return err
+		}
+		callback, err := url.Parse(parsed.Query().Get("redirect_uri"))
+		if err != nil {
+			return err
+		}
+		callback.RawQuery = url.Values{"state": {parsed.Query().Get("state")}, "code": {"test-code"}}.Encode()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, callback.String(), nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		callbackBody = string(body)
+		return err
+	})
+	if err != nil || token == nil || token.AccessToken != "access" {
+		t.Fatalf("token = %#v, error = %v", token, err)
+	}
+	if !strings.Contains(callbackBody, "return to Weekly Report") || strings.Contains(callbackBody, "terminal") {
+		t.Fatalf("GUI callback response = %q", callbackBody)
+	}
+}
